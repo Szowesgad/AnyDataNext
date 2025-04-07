@@ -119,6 +119,15 @@ class DeepSeekClient(OpenAIClient):
     def __init__(self, api_key=None):
         api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         super().__init__(api_key=api_key, base_url="https://api.deepseek.com/v1")
+    
+    async def generate(self, messages, model=None, max_tokens=None, temperature=None, system=None, **kwargs):
+        """Generates a response using DeepSeek API with specific limits."""
+        # DeepSeek ma limit max_tokens = 8192
+        if max_tokens is not None and max_tokens > 8192:
+            logger.warning(f"DeepSeek API max_tokens limit is 8192, reducing from {max_tokens} to 8192")
+            max_tokens = 8192
+            
+        return await super().generate(messages, model, max_tokens, temperature, system, **kwargs)
 
 
 class QwenClient(OpenAIClient):
