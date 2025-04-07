@@ -626,8 +626,10 @@ def parse_pdf(file_path: str, logger) -> List[Dict[str, Any]]:
     logger.info(f"[parse_pdf] Parsing .pdf file: {file_path}")
     
     try:
+        # Open in binary mode to handle PDF files correctly
         laparams = LAParams(line_margin=0.5)
-        raw_text = extract_text(file_path, laparams=laparams)
+        with open(file_path, 'rb') as f:
+            raw_text = extract_text(f, laparams=laparams)
     except Exception as e:
         logger.error(f"[parse_pdf] Error extracting text from PDF: {e}")
         raise

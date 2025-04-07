@@ -179,8 +179,38 @@ async def process_file(
         extension = file_path_obj.suffix.lower()
 
         try:
-            with file_path_obj.open('r', encoding='utf-8') as f:
-                content = f.read()
+            # Check for binary file types first
+            extension = file_path_obj.suffix.lower()
+            if extension == '.pdf':
+                # For PDF files, delegate to the appropriate parser
+                from .parsers import parse_pdf
+                records = parse_pdf(str(file_path_obj), logger)
+                return records
+            elif extension in ['.wav', '.mp3', '.ogg', '.m4a', '.flac']:
+                # For audio files, we'll need special handling
+                logger.info(f"Detected audio file ({extension}). Delegating to multimedia processor.")
+                from .multimedia_processor import create_audio_text_dataset
+                # This would typically be handled differently - for now, return an informative message
+                return [{
+                    "instruction": f"Process audio file {basename}",
+                    "prompt": "Please use the audio processing endpoint for audio files.",
+                    "completion": f"This is an audio file ({extension}) and should be processed with the dedicated audio processing API endpoint.",
+                    "metadata": {
+                        "source_file": basename,
+                        "file_type": "audio",
+                        "extension": extension,
+                        "error": "Standard text processing not suitable for audio files"
+                    }
+                }]
+            elif extension == '.docx':
+                # For DOCX files, delegate to the appropriate parser
+                from .parsers import parse_docx
+                records = parse_docx(str(file_path_obj), logger)
+                return records
+            else:
+                # Text-based files can be opened with UTF-8 encoding
+                with file_path_obj.open('r', encoding='utf-8') as f:
+                    content = f.read()
         except Exception as read_error:
              logger.error(f"Failed to read file {file_path}: {read_error}")
              raise # Re-raise to be caught by the outer try-except
