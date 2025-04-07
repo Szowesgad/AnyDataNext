@@ -62,16 +62,24 @@ def split_into_sentences(text: str) -> List[str]:
     Split text into sentences using NLTK if available,
     otherwise fallback to regex-based approach.
     """
-    if nltk_available:
-        from nltk.tokenize import sent_tokenize
-        sentences = sent_tokenize(text)
-        return [s.strip() for s in sentences if s.strip()]
-    else:
-        # Prosty fallback
-        pattern = r'(?<=[.!?])\s+'
-        raw_sentences = re.split(pattern, text)
-        sentences = [s.strip() for s in raw_sentences if s.strip()]
-        return sentences
+    try:
+        if nltk_available:
+            from nltk.tokenize import sent_tokenize
+            try:
+                sentences = sent_tokenize(text)
+                return [s.strip() for s in sentences if s.strip()]
+            except LookupError:
+                # NLTK punkt not downloaded, fall back to regex
+                pass
+    except Exception:
+        # Any other NLTK error, fall back to regex
+        pass
+        
+    # Simple regex-based fallback
+    pattern = r'(?<=[.!?])\s+'
+    raw_sentences = re.split(pattern, text)
+    sentences = [s.strip() for s in raw_sentences if s.strip()]
+    return sentences
 
 def chunk_text(text: str,
                max_size: int = MAX_CHUNK_SIZE,
