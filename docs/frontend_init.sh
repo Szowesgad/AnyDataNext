@@ -1,13 +1,6 @@
 #!/bin/bash
-# frontend_init.sh - Initializes the frontend for VistaCare Node.js application.
-# This script:
-#   1. Checks prerequisites (node, pnpm)
-#   2. Checks backend health endpoint
-#   3. Sets up environment files
-#   4. Installs dependencies
-#   5. Starts development server
-
-# Note: Requires Node.js >=14.0.0 as per package.json
+# frontend_init.sh - Initializes the Next.js frontend for AnyDataset
+# (c)2025 by M&K
 
 # ---------------------
 # Color settings for messages
@@ -38,55 +31,54 @@ check_command() {
 }
 
 # ---------------------
-# Check backend health endpoint
-check_backend() {
-    echo "🔍 Checking if backend is running..."
-    if ! curl -s "http://localhost:3001/health" > /dev/null; then
-        warn_msg "Backend is not running. Please start the server first!"
-        read -p "Do you want me to try starting the server? [Y/n]: " start_server
-        if [[ ! "$start_server" =~ ^[Nn]$ ]]; then
-            cd server || error_exit "Cannot find server directory"
-            bash server_init.sh &
-            cd ..
-            echo "Waiting for server to start..."
-            sleep 5
-            if ! curl -s "http://localhost:3001/health" > /dev/null; then
-                error_exit "Server failed to start. Please check server logs."
-            fi
-        else
-            error_exit "Please start the server first using server_init.sh"
-        fi
-    fi
-    success_msg "Backend is running"
-}
-
-# ---------------------
-# Setup environment files
-setup_env() {
-    if [ ! -f .env ]; then
-        echo "🔍 No .env file found, copying from .env.development..."
-        cp .env.development .env || error_exit "Failed to copy .env.development to .env"
-        success_msg "Environment file created from .env.development"
-    else
-        success_msg "Environment file (.env) exists"
-    fi
-}
-
-# ---------------------
 # Main execution
 echo "🔍 Checking prerequisites..."
 check_command node
-check_command pnpm
+check_command npm
 
-# Check if backend is running
-check_backend
+# Create Next.js app with TypeScript, ESLint, and Tailwind CSS
+echo "🚀 Creating Next.js application..."
+npx create-next-app@latest frontend-next --ts --eslint --tailwind --app --src-dir --use-npm || error_exit "Failed to create Next.js application"
+success_msg "Next.js application created"
 
-# Setup environment files
-setup_env
+# Navigate to the new project
+cd frontend-next || error_exit "Failed to navigate to frontend-next directory"
 
-echo "🚀 Installing frontend dependencies..."
-pnpm install || error_exit "Failed to install frontend dependencies"
-success_msg "Frontend dependencies installed"
+# Install additional dependencies
+echo "📦 Installing additional dependencies..."
+npm install @radix-ui/react-select @radix-ui/react-slot @radix-ui/react-progress \
+  @radix-ui/react-context-menu @radix-ui/react-dialog class-variance-authority clsx \
+  tailwind-merge lucide-react tailwindcss-animate next-themes axios react-dropzone \
+  || error_exit "Failed to install additional dependencies"
+success_msg "Additional dependencies installed"
 
-echo "🌟 Starting frontend in development mode..."
-pnpm dev || error_exit "Failed to start frontend"
+# Install shadcn/ui CLI for component installation
+npm install -D @shadcn/ui || error_exit "Failed to install shadcn/ui CLI"
+
+# Initialize shadcn/ui
+echo "🎨 Initializing shadcn/ui..."
+npx shadcn-ui@latest init || error_exit "Failed to initialize shadcn/ui"
+success_msg "shadcn/ui initialized"
+
+# Install specific UI components
+echo "🧩 Installing UI components..."
+npx shadcn-ui@latest add button card dialog dropdown-menu input label select table tabs toast progress || error_exit "Failed to install UI components"
+success_msg "UI components installed"
+
+# Create folder structure
+echo "📁 Creating folder structure..."
+mkdir -p src/app/api
+mkdir -p src/components/{ui,forms,layout,data-display}
+mkdir -p src/lib/{api,hooks,utils}
+mkdir -p src/types
+mkdir -p public/icons
+success_msg "Folder structure created"
+
+# Copy existing public assets if available
+if [ -d "../frontend/public" ]; then
+  echo "🖼️ Copying existing public assets..."
+  cp -r ../frontend/public/* public/ || warn_msg "Failed to copy some public assets"
+  success_msg "Public assets copied"
+fi
+
+echo "✨ Next.js frontend initialization complete!"
