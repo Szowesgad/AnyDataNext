@@ -268,23 +268,92 @@ async def process_file(
                 }
             }]
 
-        # Parse the response
+        # Parse the response with enhanced resilience (addressing HOTFIX point 2)
         try:
-            # Attempt to find and parse the JSON array
-            json_start = response.find('[')
-            json_end = response.rfind(']') + 1
-
-            if json_start == -1 or json_end == 0:
-                logger.error(f"No JSON array found in LLM response for {basename}. Response: {response[:500]}...")
-                raise ValueError("No JSON array found in response")
-
-            json_str = response[json_start:json_end]
-            records = json.loads(json_str)
-
+            # First, attempt to parse the entire response as JSON directly
+            # This works when the model returns clean JSON without text wrappers
+            try:
+                direct_parse = json.loads(response)
+                if isinstance(direct_parse, list):
+                    logger.info(f"Successfully parsed direct JSON response for {basename}")
+                    records = direct_parse
+                else:
+                    # If it parsed but isn't a list, it might be a JSON object with a data field
+                    logger.debug(f"Response parsed as JSON but not a list. Looking for data field.")
+                    if isinstance(direct_parse, dict) and 'data' in direct_parse and isinstance(direct_parse['data'], list):
+                        logger.info(f"Found data field in JSON response object for {basename}")
+                        records = direct_parse['data']
+                    else:
+                        # Will try other methods below
+                        raise ValueError("Direct JSON parse succeeded but result is not a list or data object")
+            except json.JSONDecodeError:
+                # If direct parse fails, try to extract JSON array from text
+                logger.debug(f"Direct JSON parse failed, attempting to extract JSON array from text")
+                
+                # Attempt to find and parse the JSON array with smarter boundary detection
+                json_start = response.find('[')
+                # Look for balanced closing bracket by counting open/close brackets
+                if json_start != -1:
+                    open_count = 1
+                    for i in range(json_start + 1, len(response)):
+                        if response[i] == '[':
+                            open_count += 1
+                        elif response[i] == ']':
+                            open_count -= 1
+                            if open_count == 0:
+                                json_end = i + 1
+                                break
+                else:
+                    json_end = 0  # No starting bracket found
+                
+                if json_start == -1 or json_end == 0:
+                    logger.warning(f"No JSON array found in LLM response for {basename}. Attempting alternative formats.")
+                    
+                    # Try to find JSON objects - maybe it's a sequence of JSON objects without array brackets
+                    # This handles newline-delimited JSON format (JSONL)
+                    jsonl_pattern = r'\{(?:[^{}]|"(?:\\.|[^"\\])*"|\{(?:[^{}]|"(?:\\.|[^"\\])*")*\})*\}'
+                    import re
+                    jsonl_matches = re.finditer(jsonl_pattern, response)
+                    jsonl_objects = []
+                    
+                    for match in jsonl_matches:
+                        try:
+                            obj = json.loads(match.group(0))
+                            jsonl_objects.append(obj)
+                        except:
+                            pass
+                    
+                    if jsonl_objects:
+                        logger.info(f"Parsed {len(jsonl_objects)} JSONL objects from response for {basename}")
+                        records = jsonl_objects
+                    else:
+                        # Last resort - try to create a very basic structured output from unstructured text
+                        logger.error(f"Failed to parse response as JSON or JSONL. Creating basic fallback record.")
+                        fallback_record = {
+                            "instruction": f"Analyze content of {basename} (fallback parsing)",
+                            "prompt": "What information can be extracted from this document?",
+                            "completion": response[:2000] + ("..." if len(response) > 2000 else ""),
+                            "metadata": {
+                                "source_file": basename,
+                                "parser_fallback": True,
+                                "model_used": model,
+                                "processing_time": f"{time.time() - start_time:.2f}s",
+                                "confidence_score": 0.4,
+                                "error": "Failed to parse as JSON or JSONL",
+                                "keywords": []
+                            }
+                        }
+                        return [fallback_record]
+                else:
+                    # Standard JSON array extraction logic
+                    json_str = response[json_start:json_end]
+                    records = json.loads(json_str)
+            
+            # Validate the parsed records
             if not isinstance(records, list):
-                 logger.error(f"Parsed JSON is not a list for {basename}. Type: {type(records)}")
-                 raise ValueError("Parsed JSON is not a list")
-
+                logger.error(f"Parsed JSON is not a list for {basename}. Type: {type(records)}")
+                raise ValueError("Parsed JSON is not a list")
+            
             # Add/update processing time and ensure all metadata is present
             processing_time = time.time() - start_time
             record_count = len(records)
@@ -367,10 +436,12 @@ async def process_files(
     add_reasoning: bool = False,
     processing_type: str = "standard",
     language: str = "pl",
-    concurrent_limit: int = 3 # Default concurrency limit
+    concurrent_limit: int = 3, # Default concurrency limit
+    batch_size: int = 5,  # Default batch size for rate limiting
+    batch_delay: float = 0.5  # Default delay between batches in seconds
 ) -> List[Dict[str, Any]]:
     """
-    Process multiple files concurrently with rate limiting.
+    Process multiple files concurrently with advanced rate limiting and error handling.
 
     Args:
         file_paths: List of paths to files to process.
@@ -384,77 +455,188 @@ async def process_files(
         processing_type: Type of processing.
         language: Target language.
         concurrent_limit: Maximum number of concurrent processing tasks.
+        batch_size: Number of files to process per batch for rate limiting.
+        batch_delay: Delay between batches in seconds.
 
     Returns:
         List of all generated records from all processed files.
     """
+    from .logging import log_exception
+    
     start_time = time.time()
     logger.info(f"Starting batch processing of {len(file_paths)} files with concurrency {concurrent_limit}")
+    
+    # Store statistics for reporting
+    stats = {
+        "total_files": len(file_paths),
+        "successful_files": 0,
+        "failed_files": 0,
+        "api_errors": 0,
+        "total_records": 0,
+        "start_time": start_time,
+        "provider": model_provider,
+        "model": model
+    }
 
+    # Determine optimal batch size based on API rate limits for provider
+    # Default conservative limits by provider
+    rate_limits = {
+        "openai": {"requests_per_min": 60, "tokens_per_min": 90000},
+        "anthropic": {"requests_per_min": 50, "tokens_per_min": 100000},
+        "mistral": {"requests_per_min": 40, "tokens_per_min": 80000},
+        "deepseek": {"requests_per_min": 20, "tokens_per_min": 50000},
+        "libraxis": {"requests_per_min": 100, "tokens_per_min": 120000},
+        "local": {"requests_per_min": 200, "tokens_per_min": 500000}
+    }
+    
+    # Get rate limits for the provider
+    provider_key = model_provider.lower() if model_provider else "openai"
+    provider_limits = rate_limits.get(provider_key, {"requests_per_min": 30, "tokens_per_min": 50000})
+    
+    # Adjust concurrent_limit based on API limits if needed
+    max_requests_per_min = provider_limits["requests_per_min"]
+    adjusted_concurrent_limit = min(concurrent_limit, max(1, max_requests_per_min // 10))
+    if adjusted_concurrent_limit < concurrent_limit:
+        logger.warning(f"Adjusted concurrent_limit from {concurrent_limit} to {adjusted_concurrent_limit} based on provider limits")
+        concurrent_limit = adjusted_concurrent_limit
+    
     # Create semaphore for concurrency control
     semaphore = asyncio.Semaphore(concurrent_limit)
-
-    async def process_with_semaphore(file_path):
-        async with semaphore:
-            # Ensure all necessary parameters are passed down
-            return await process_file(
-                file_path=file_path,
-                model_provider=model_provider,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                system_prompt=system_prompt,
-                keywords=keywords,
-                add_reasoning=add_reasoning,
-                processing_type=processing_type,
-                language=language,
-                start_time=start_time # Pass the overall batch start time
-            )
-
-    # Create tasks for all files
-    tasks = [process_with_semaphore(file_path) for file_path in file_paths]
-
-    # Run tasks and collect results
-    # Use return_exceptions=True to capture errors without stopping the whole batch
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Flatten results and handle potential exceptions returned by gather
+    
+    # Process files with retry logic, rate limiting and advanced error handling
+    async def process_with_semaphore(file_path, retries=3):
+        retry_count = 0
+        backoff_factor = 1.5  # Exponential backoff multiplier
+        
+        while retry_count <= retries:
+            try:
+                async with semaphore:
+                    # Add jitter to prevent thundering herd problem
+                    await asyncio.sleep(0.1 * random.random())
+                    
+                    logger.info(f"Processing file: {os.path.basename(file_path)} (attempt {retry_count + 1}/{retries + 1})")
+                    
+                    # Ensure all necessary parameters are passed down
+                    result = await process_file(
+                        file_path=file_path,
+                        model_provider=model_provider,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        system_prompt=system_prompt,
+                        keywords=keywords,
+                        add_reasoning=add_reasoning,
+                        processing_type=processing_type,
+                        language=language,
+                        start_time=time.time()  # Use fresh start time for each file
+                    )
+                    
+                    # Success case - log and return results
+                    logger.info(f"Successfully processed {os.path.basename(file_path)}: {len(result)} records")
+                    return result
+                    
+            except Exception as e:
+                retry_count += 1
+                
+                # Check if exception indicates a rate limit
+                is_rate_limit = False
+                if hasattr(e, "__module__") and "openai" in getattr(e, "__module__", ""):
+                    is_rate_limit = "rate" in str(e).lower() and "limit" in str(e).lower()
+                elif "rate limit" in str(e).lower() or "too many requests" in str(e).lower():
+                    is_rate_limit = True
+                
+                # Handle based on error type and retry count
+                if is_rate_limit and retry_count <= retries:
+                    # Calculate backoff with jitter for rate limits
+                    wait_time = (backoff_factor ** retry_count) * 2 + random.uniform(0, 1)
+                    logger.warning(f"Rate limit hit processing {os.path.basename(file_path)}. Retrying in {wait_time:.2f}s ({retry_count}/{retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                elif retry_count <= retries:
+                    # Other errors - log and retry with shorter backoff
+                    wait_time = (backoff_factor ** retry_count) * 1 + random.uniform(0, 0.5)
+                    logger.error(f"Error processing {os.path.basename(file_path)}: {e}. Retrying in {wait_time:.2f}s ({retry_count}/{retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    # All retries failed - log detailed error for debugging
+                    log_exception(
+                        logger, 
+                        context={
+                            "file": file_path,
+                            "provider": model_provider,
+                            "model": model,
+                            "retries": retry_count - 1
+                        }
+                    )
+                    
+                    # Create error record
+                    error_message = f"Failed after {retry_count} retries: {type(e).__name__}: {str(e)}"
+                    logger.error(f"Final error processing {os.path.basename(file_path)}: {error_message}")
+                    
+                    # Structured error record
+                    return [{
+                        "instruction": f"Review error for file: {os.path.basename(file_path)}",
+                        "prompt": "What went wrong during processing this specific file?",
+                        "completion": f"An exception occurred: {error_message}",
+                        "metadata": {
+                            "source_file": os.path.basename(file_path),
+                            "error": error_message,
+                            "exception_type": type(e).__name__,
+                            "model_used": model or get_default_model(model_provider or get_default_provider()),
+                            "processing_time": f"{time.time() - start_time:.2f}s",
+                            "retry_attempts": retry_count
+                        }
+                    }]
+    
+    # Process files in batches to control rate limiting
     all_records = []
-    for i, result in enumerate(results):
-        file_basename = os.path.basename(file_paths[i]) # Get filename for context
-        if isinstance(result, list): # Successful processing returns a list of records
-            all_records.extend(result)
-        elif isinstance(result, Exception):
-            error_message = f"Error processing file {file_basename}: {type(result).__name__}: {result}"
-            logger.error(error_message, exc_info=result) # Log the exception info
-            # Add a specific error record for this file
-            all_records.append({
-                "instruction": f"Review error for file: {file_basename}",
-                "prompt": "What went wrong during processing this specific file?",
-                "completion": f"An exception occurred: {error_message}",
-                "metadata": {
-                    "source_file": file_basename,
-                    "error": error_message,
-                    "model_used": model or get_default_model(model_provider or get_default_provider()),
-                    "processing_time": f"{time.time() - start_time:.2f}s"
-                }
-            })
-        else: # Should not happen with return_exceptions=True, but handle defensively
-             unknown_error = f"Unknown error or unexpected result type ({type(result)}) processing file {file_basename}"
-             logger.error(unknown_error)
-             all_records.append({
-                 "instruction": f"Investigate processing for file: {file_basename}",
-                 "prompt": "What was the outcome of processing this file?",
-                 "completion": unknown_error,
-                 "metadata": {
-                     "source_file": file_basename,
-                     "error": unknown_error,
-                     "model_used": model or get_default_model(model_provider or get_default_provider()),
-                     "processing_time": f"{time.time() - start_time:.2f}s"
-                 }
-             })
-
-    logger.info(f"Completed batch processing, generated {len(all_records)} total records")
+    total_batches = (len(file_paths) + batch_size - 1) // batch_size  # Ceiling division
+    
+    for batch_index in range(total_batches):
+        batch_start = batch_index * batch_size
+        batch_end = min(batch_start + batch_size, len(file_paths))
+        current_batch = file_paths[batch_start:batch_end]
+        
+        logger.info(f"Processing batch {batch_index + 1}/{total_batches} ({len(current_batch)} files)")
+        
+        # Process current batch in parallel
+        batch_tasks = [process_with_semaphore(file_path) for file_path in current_batch]
+        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=False)
+        
+        # Process batch results
+        for i, result in enumerate(batch_results):
+            file_basename = os.path.basename(current_batch[i])
+            
+            # Check if result is a list of records (success case)
+            if isinstance(result, list):
+                if any("error" in record.get("metadata", {}) for record in result):
+                    # This was an error record from the retry mechanism
+                    stats["failed_files"] += 1
+                    all_records.extend(result)
+                else:
+                    # Regular success case
+                    stats["successful_files"] += 1
+                    stats["total_records"] += len(result)
+                    all_records.extend(result)
+                    
+        # Add delay between batches to prevent rate limiting
+        if batch_index < total_batches - 1:
+            logger.info(f"Batch {batch_index + 1} complete. Waiting {batch_delay}s before next batch...")
+            await asyncio.sleep(batch_delay)
+    
+    # Calculate final statistics
+    elapsed_time = time.time() - start_time
+    stats["elapsed_time"] = f"{elapsed_time:.2f}s"
+    stats["throughput"] = f"{stats['total_files'] / elapsed_time:.2f} files/sec"
+    stats["success_rate"] = f"{stats['successful_files'] / stats['total_files'] * 100:.1f}%"
+    
+    logger.info(
+        f"Completed batch processing in {elapsed_time:.2f}s: "
+        f"{stats['successful_files']}/{stats['total_files']} files successful, "
+        f"{stats['total_records']} total records"
+    )
+    
     return all_records
 
 def save_results(records: List[Dict[str, Any]], output_path: str, format: str = 'json') -> str:
