@@ -36,11 +36,11 @@ def extract_article_metadata(text):
     }
     
     # Try to find title (usually at the beginning)
-    title_match = re.search(r"^(.+?)(?=
+    title_match = re.search(r'^(.+?)(?=
 
 |
 Streszczenie|
-Abstract)", text, re.DOTALL)
+Abstract)', text, re.DOTALL)
     if title_match:
         lines = title_match.group(1).strip().split('
 ')
@@ -615,7 +615,7 @@ def process_articles(
          # TODO: Implement proper parallel processing here with progress updates
         processed_valid_data = []
         for item in tqdm(valid_data, desc="Adding reasoning to valid (Sequential)"):
-            processed_valid_data.append(process_with_reasoning(item))
+            processed_valid_data.append(process_with_with_reasoning(item))
         valid_data = processed_valid_data
     
     # Save data
