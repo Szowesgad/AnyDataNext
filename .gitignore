@@ -91,3 +91,4 @@ out/
 
 # But we DO track the example data files
 !/backend/data/
+CLAUDE.md
