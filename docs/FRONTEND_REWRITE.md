@@ -1090,6 +1090,152 @@ export default function RootLayout({
 }
 ```
 
+## Testing Implementation
+Implement comprehensive tests for each component and API client:
+
+### 1. Test Setup
+Configure Jest and React Testing Library in `jest.config.js` and `jest.setup.js`:
+
+```javascript
+// jest.config.js
+const nextJest = require('next/jest');
+
+const createJestConfig = nextJest({
+  dir: './',
+});
+
+const customJestConfig = {
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  testEnvironment: 'jest-environment-jsdom',
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/$1',
+  },
+  coverageThreshold: {
+    global: {
+      branches: 70,
+      functions: 70,
+      lines: 70,
+      statements: 70,
+    },
+  },
+};
+
+module.exports = createJestConfig(customJestConfig);
+```
+
+```javascript
+// jest.setup.js
+import '@testing-library/jest-dom';
+
+// Mock next/router
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: jest.fn(),
+    back: jest.fn(),
+    forward: jest.fn(),
+  }),
+  usePathname: () => '',
+  useSearchParams: () => new URLSearchParams(),
+}));
+
+// Mock WebSocket
+global.WebSocket = class WebSocket {
+  constructor(url) {
+    this.url = url;
+    this.readyState = 1; // Open
+  }
+  
+  send() {}
+  close() {}
+}
+```
+
+### 2. Component Tests
+Create test files for each component to ensure proper rendering and functionality:
+
+```typescript
+// __tests__/components/forms/FileUpload.test.tsx
+import { render, screen, fireEvent } from '@testing-library/react';
+import { FileUpload } from '@/components/forms/FileUpload';
+import { uploadFile } from '@/lib/api/client';
+
+jest.mock('@/lib/api/client');
+
+describe('FileUpload', () => {
+  it('renders correctly', () => {
+    render(<FileUpload onFileUploaded={() => {}} />);
+    
+    expect(screen.getByText('Upload Dataset')).toBeInTheDocument();
+    expect(screen.getByText(/drag & drop a file here/i)).toBeInTheDocument();
+  });
+  
+  // More tests for file upload functionality...
+});
+```
+
+### 3. API Client Tests
+Test API client functions with mocked Axios responses:
+
+```typescript
+// __tests__/lib/api/client.test.ts
+import axios from 'axios';
+import { fetchDatasets, uploadFile } from '@/lib/api/client';
+
+jest.mock('axios');
+const mockedAxios = axios as jest.Mocked<typeof axios>;
+
+describe('API Client', () => {
+  beforeEach(() => {
+    jest.resetAllMocks();
+  });
+  
+  it('fetches datasets correctly', async () => {
+    const mockData = [{ id: '1', name: 'test.txt' }];
+    mockedAxios.get.mockResolvedValueOnce({ data: mockData });
+    
+    const result = await fetchDatasets();
+    
+    expect(mockedAxios.get).toHaveBeenCalledWith('/datasets');
+    expect(result).toEqual(mockData);
+  });
+  
+  // More tests for API functions...
+});
+```
+
+### 4. Page Tests
+Test page components for proper rendering and state management:
+
+```typescript
+// __tests__/app/upload/page.test.tsx
+import { render, screen, fireEvent } from '@testing-library/react';
+import UploadPage from '@/app/upload/page';
+import { processFile } from '@/lib/api/client';
+
+jest.mock('@/lib/api/client');
+jest.mock('@/components/forms/FileUpload', () => ({
+  FileUpload: ({ onFileUploaded }) => (
+    <button onClick={() => onFileUploaded({ id: '1', name: 'test.txt' })}>
+      Mock Upload
+    </button>
+  ),
+}));
+
+describe('UploadPage', () => {
+  it('handles file upload correctly', () => {
+    render(<UploadPage />);
+    fireEvent.click(screen.getByText('Mock Upload'));
+    
+    // Check that file details are shown
+    expect(screen.getByText(/test.txt/)).toBeInTheDocument();
+  });
+  
+  // More tests for page functionality...
+});
+```
+
+Run tests with `npm test` and aim for 70% code coverage.
+
 ## Implementation Steps
 Follow these steps to complete the frontend rewrite:
 
@@ -1105,6 +1251,7 @@ Follow these steps to complete the frontend rewrite:
    - Create the home page, upload page, and batch page
 
 4. **Testing and Refinement**
+   - Write and run tests for all components and services
    - Test the application with the backend running
    - Ensure all features work as expected
    - Refine UI/UX as needed
@@ -1136,5 +1283,6 @@ Make sure the frontend properly integrates with the existing backend API endpoin
 - Use environment variables for API configuration
 - Ensure accessibility with proper ARIA attributes
 - Follow the existing file naming conventions
+- Write comprehensive tests for all components and utilities
 
 (c)2025 by M&K
