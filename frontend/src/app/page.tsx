@@ -7,6 +7,7 @@ import { useState, useEffect, useRef } from "react";
 import axios from 'axios';
 import { Progress } from '@/components/ui/progress';
 import ExistingDatasets from '@/components/ExistingDatasets';
+import JobStatusRecovery from '@/components/JobStatusRecovery';
 import { AvailableModels } from '../types/models';
 
 // Helper function to determine if a file is audio/video based on extension
@@ -467,8 +468,10 @@ export default function Home() {
             initialLanguage={uploadedFileInfo.language}
             onSubmit={handleConfigureAndProcess}
             onCancel={handleCancel}
+            backendUrl={backendUrl}
             availableModels={availableModels}
             isLoadingModels={isLoadingModels}
+            fileId={uploadedFileInfo.fileId}
           />
         )}
 
@@ -503,10 +506,45 @@ export default function Home() {
 
         {!uploadedFileInfo && !isProcessing && !finalResultUrl && (
           <div className="mt-12 pt-8 border-t border-gray-300 dark:border-gray-700 w-full">
-            <ExistingDatasets backendUrl={backendUrl} onSelectDataset={(datasetId) => {
-              console.log(`Selected dataset: ${datasetId}`);
-              // Implement dataset selection logic if needed
-            }} />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <ExistingDatasets backendUrl={backendUrl} onSelectDataset={(datasetId) => {
+                console.log(`Selected dataset: ${datasetId}`);
+                // Implement dataset selection logic if needed
+              }} />
+              
+              <JobStatusRecovery 
+                backendUrl={backendUrl}
+                onJobRecovered={(jobId, jobStatus) => {
+                  console.log("Recovered job:", jobId, jobStatus);
+                  
+                  // Set current job ID
+                  setCurrentJobId(jobId);
+                  
+                  // Handle different job states
+                  if (jobStatus.completed && jobStatus.status === "completed") {
+                    // Job is complete, show result
+                    setStatusText('Processing Complete!');
+                    setProcessingProgress(100);
+                    setFinalResultUrl(`${backendUrl}/api/results/${jobId}`);
+                    setIsProcessing(false);
+                  } else if (jobStatus.status === "error") {
+                    // Job failed
+                    setError(`Processing Failed: ${jobStatus.error || 'Unknown error'}`);
+                    setStatusText('Processing Failed');
+                    setProcessingProgress(0);
+                    setIsProcessing(false);
+                  } else {
+                    // Job is still in progress
+                    setIsProcessing(true);
+                    setProcessingProgress(jobStatus.progress || 0);
+                    setStatusText(jobStatus.status || 'Processing...');
+                    
+                    // Connect to WebSocket for updates
+                    setupWebSocket(jobId);
+                  }
+                }}
+              />
+            </div>
           </div>
         )}
       </div>
