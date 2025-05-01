@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AnyDataset - Redirecting</title>
+  <script>
+    // Base path for GitHub Pages deployment
+    var segmentCount = 1; // Change to match the number of segments in your GitHub Pages URL
+    var l = window.location;
+    var basePath = '/AnyDataset'; // Change to match your repository name
+    
+    // Handle redirects for Single Page Apps on GitHub Pages
+    var repo = basePath.replace(/^\//, '');
+    l.replace(
+      l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
+      l.pathname.split('/').slice(0, 1 + segmentCount).join('/') + '/?p=/' +
+      l.pathname.slice(1).split('/').slice(segmentCount).join('/').replace(/&/g, '~and~') +
+      (l.search ? '&q=' + l.search.slice(1).replace(/&/g, '~and~') : '') +
+      l.hash
+    );
+  </script>
+</head>
+<body>
+  <h1>Redirecting...</h1>
+  <a href="/AnyDataset">Click here if you are not redirected.</a>
+</body>
+</html>
