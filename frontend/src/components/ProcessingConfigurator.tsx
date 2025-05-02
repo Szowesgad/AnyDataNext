@@ -1,11 +1,11 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-// Removed axios import as fetching is done by parent
 import { AvailableModels } from '@/types/models'; // Keep type import, path might need user fix
 
 // Import ONLY shadcn/ui Select components
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import SuggestionButton from './SuggestionButton';
 // Removed Textarea, Button, Input imports from shadcn/ui
 
 // --- Helper Types --- 
@@ -51,9 +51,10 @@ interface ProcessingConfiguratorProps {
   initialLanguage?: string; // Keep prop, even if unused for now
   onSubmit: (config: ProcessingConfig) => void;
   onCancel: () => void;
-  // Removed backendUrl prop as it's not needed here anymore
+  backendUrl: string; // Re-added for suggestion API
   availableModels: AvailableModels | null; // Use the prop
   isLoadingModels: boolean; // Use the prop
+  fileId: string; // Added to support suggestion API
 }
 
 // --- Component --- 
@@ -63,8 +64,10 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
   initialLanguage = 'pl', // Default value used if needed later
   onSubmit,
   onCancel,
+  backendUrl,
   availableModels, // Use prop
   isLoadingModels, // Use prop
+  fileId,
 }) => {
   // --- State --- 
   const [selectedProvider, setSelectedProvider] = useState<string>('');
@@ -228,6 +231,22 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
             </SelectContent>
           </Select>
         </div>
+      </div>
+
+      {/* AI Suggestions Button */}
+      <div className="mb-6 flex justify-end">
+        <SuggestionButton 
+          backendUrl={backendUrl}
+          fileId={fileId}
+          onSuggestionsReceived={(suggestedKeywords, suggestedPrompt) => {
+            if (suggestedKeywords.length > 0) {
+              setKeywords(suggestedKeywords.join(', '));
+            }
+            if (suggestedPrompt) {
+              setSystemPrompt(suggestedPrompt);
+            }
+          }}
+        />
       </div>
 
       {/* System Prompt - USE STANDARD TEXTAREA */}

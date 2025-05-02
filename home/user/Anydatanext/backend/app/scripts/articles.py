@@ -36,11 +36,11 @@ def extract_article_metadata(text):
     }
     
     # Try to find title (usually at the beginning)
-    title_match = re.search(r"^(.+?)(?=
+    title_match = re.search(r'^(.+?)(?=
 
 |
 Streszczenie|
-Abstract)", text, re.DOTALL)
+Abstract)', text, re.DOTALL)
     if title_match:
         lines = title_match.group(1).strip().split('
 ')
@@ -602,74 +602,21 @@ def process_articles(
                  logging.error(f"Error adding reasoning to example: {item.get('prompt', 'N/A')[:50]}... {e}")
                  return item # Return original item if reasoning fails
         
-        # Function for parallel processing with rate limiting
-        def parallel_process_with_limit(items, process_func, desc, max_workers, batch_size=10):
-            """
-            Process items in parallel with rate limiting to avoid API limits.
-            
-            Args:
-                items: List of items to process
-                process_func: Function to apply to each item
-                desc: Description for progress bar
-                max_workers: Maximum number of parallel workers
-                batch_size: Size of batches to process together
-                
-            Returns:
-                List of processed items
-            """
-            results = []
-            total_items = len(items)
-            
-            # Process in batches to avoid hitting rate limits
-            with tqdm(total=total_items, desc=desc) as pbar:
-                for i in range(0, total_items, batch_size):
-                    batch_items = items[i:i+batch_size]
-                    batch_size_actual = len(batch_items)
-                    
-                    # Process current batch in parallel
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                        # Submit all tasks
-                        future_to_item = {executor.submit(process_func, item): item for item in batch_items}
-                        
-                        # Process as completed
-                        for future in concurrent.futures.as_completed(future_to_item):
-                            try:
-                                result = future.result()
-                                results.append(result)
-                            except Exception as e:
-                                item = future_to_item[future]
-                                logging.error(f"Error in parallel processing: {e}")
-                                results.append(item)  # Add original item on error
-                            finally:
-                                pbar.update(1)
-                    
-                    # Add a small delay between batches to avoid rate limiting
-                    if i + batch_size < total_items:
-                        time.sleep(1)  # 1 second between batches
-            
-            return results
-            
-        # Process train data in parallel
+        # Process train data
         print("Processing training data...")
-        batch_size = 20  # Adjust batch size based on API limits
-        effective_workers = min(max_workers, 5)  # Limit workers for API calls
-        train_data = parallel_process_with_limit(
-            train_data, 
-            process_with_reasoning, 
-            "Adding reasoning to train (Parallel)", 
-            effective_workers,
-            batch_size
-        )
+        # TODO: Implement proper parallel processing here with progress updates
+        processed_train_data = []
+        for item in tqdm(train_data, desc="Adding reasoning to train (Sequential)"):
+            processed_train_data.append(process_with_reasoning(item))
+        train_data = processed_train_data
         
-        # Process validation data in parallel
+        # Process validation data
         print("Processing validation data...")
-        valid_data = parallel_process_with_limit(
-            valid_data, 
-            process_with_reasoning, 
-            "Adding reasoning to valid (Parallel)", 
-            effective_workers,
-            batch_size
-        )
+         # TODO: Implement proper parallel processing here with progress updates
+        processed_valid_data = []
+        for item in tqdm(valid_data, desc="Adding reasoning to valid (Sequential)"):
+            processed_valid_data.append(process_with_with_reasoning(item))
+        valid_data = processed_valid_data
     
     # Save data
     train_path = os.path.join(output_dir, "train.jsonl")

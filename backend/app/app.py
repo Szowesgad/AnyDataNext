@@ -456,8 +456,35 @@ async def process_single_file_background(
         # (process_file returns a list with a single error record on failure)
         if len(file_records) == 1 and "error" in file_records[0].get("metadata", {}):
              error_info = file_records[0]["metadata"]["error"]
-             logger.error(f"Processing function failed for job {job_id}: {error_info}")
-             raise Exception(f"Processing failed: {error_info}") # Raise exception to trigger error handling
+             # Use enhanced structured logging for better error reporting
+             from app.utils.logging import log_exception
+             logger.error(
+                 f"Processing function failed for job {job_id}: {error_info}",
+                 extra={
+                     "structured_data": {
+                         "job_id": job_id,
+                         "error_info": error_info,
+                         "file_path": str(file_path),
+                         "process_params": params.dict(),
+                         "error_record": file_records[0]
+                     }
+                 }
+             )
+             # Raise a more specific exception for better error handling
+             try:
+                 raise ValueError(f"Processing failed: {error_info}")
+             except ValueError:
+                 log_exception(
+                     logger,
+                     job_id=job_id,
+                     context={
+                         "file_path": str(file_path),
+                         "model_provider": params.model_provider,
+                         "model": params.model,
+                         "processing_type": params.processing_type
+                     }
+                 )
+                 raise  # Re-raise to trigger error handling
 
         # If processing successful, send saving status
         await manager.broadcast({"job_id": job_id, "type": "job_update", "status": "Saving results...", "progress": 95})
