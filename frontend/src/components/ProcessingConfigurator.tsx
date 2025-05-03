@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { AvailableModels } from '../types/models';
 
 interface ProcessingConfig {
   provider: string;
@@ -28,54 +29,89 @@ interface ModelData {
 }
 
 interface ProcessingConfiguratorProps {
-  config: ProcessingConfig;
-  setConfig: React.Dispatch<React.SetStateAction<ProcessingConfig>>;
-  modelData: ModelData | null;
-  isLoading: boolean;
+  originalFilename: string;
+  initialKeywords?: string[];
+  initialLanguage?: string;
+  onSubmit: (config: any) => void;
+  onCancel: () => void;
   backendUrl: string;
-  fileId?: string;
+  availableModels: AvailableModels | null;
+  isLoadingModels: boolean;
+  fileId: string;
 }
 
 const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
-  config,
-  setConfig,
-  modelData,
-  isLoading,
+  originalFilename,
+  initialKeywords,
+  initialLanguage,
+  onSubmit,
+  onCancel,
   backendUrl,
+  availableModels: modelData,
+  isLoadingModels: isLoading,
   fileId
 }) => {
-  const [availableModels, setAvailableModels] = useState<ProviderModel[]>([]);
-  const [keywordsInput, setKeywordsInput] = useState<string>('');
+  // Create internal config state
+  const [config, setConfig] = useState<ProcessingConfig>({
+    provider: '',
+    model: '',
+    keywords: initialKeywords || [],
+    language: initialLanguage || 'pl',
+    temperature: 0.7,
+    processingType: 'standard',
+    addReasoning: false,
+    outputFormat: 'json'
+  });
+
+  const [modelOptions, setModelOptions] = useState<ProviderModel[]>([]);
+  const [keywordsInput, setKeywordsInput] = useState<string>(initialKeywords?.join(', ') || '');
   const [suggestedKeywords, setSuggestedKeywords] = useState<string[]>([]);
   const [suggestedPrompt, setSuggestedPrompt] = useState<string>('');
   const [isSuggesting, setIsSuggesting] = useState<boolean>(false);
 
   // Processing type options
-  const [processingType, setProcessingType] = useState<string>(config.processingType || 'standard');
-  const [language, setLanguage] = useState<string>(config.language || 'pl');
-  const [addReasoning, setAddReasoning] = useState<boolean>(config.addReasoning || false);
-  const [outputFormat, setOutputFormat] = useState<string>(config.outputFormat || 'json');
+  const [processingType, setProcessingType] = useState<string>('standard');
+  console.log('ProcessingConfigurator initialized with backendUrl:', backendUrl);
+  const [language, setLanguage] = useState<string>(initialLanguage || 'pl');
+  const [addReasoning, setAddReasoning] = useState<boolean>(false);
+  const [outputFormat, setOutputFormat] = useState<string>('json');
+
+  // Initialize provider when component mounts
+  useEffect(() => {
+    if (modelData && Object.keys(modelData).length > 0) {
+      // Select the first provider by default
+      const firstProvider = Object.keys(modelData)[0];
+      setConfig(prev => ({
+        ...prev,
+        provider: firstProvider
+      }));
+    }
+  }, [modelData]);
 
   // Update available models when provider changes or modelData loads
   useEffect(() => {
     if (modelData && config.provider) {
       const providerInfo = modelData[config.provider];
       if (providerInfo && Array.isArray(providerInfo.models)) {
-        setAvailableModels(providerInfo.models);
+        setModelOptions(providerInfo.models.map(model => ({
+          id: model.id || model.model_id || model,
+          name: model.name || model.model_name || model
+        })));
         
         // If we haven't selected a model yet, or the selected model isn't available
         // for this provider, select the first available model
-        const modelExists = providerInfo.models.some(m => m.id === config.model);
+        const modelExists = providerInfo.models.some(m => (m.id || m.model_id || m) === config.model);
         if (!config.model || !modelExists) {
           if (providerInfo.models.length > 0) {
+            const firstModel = providerInfo.models[0];
             setConfig(prev => ({
               ...prev,
-              model: providerInfo.models[0].id
+              model: firstModel.id || firstModel.model_id || firstModel
             }));
           }
         }
       } else {
-        setAvailableModels([]);
+        setModelOptions([]);
       }
     }
   }, [config.provider, modelData]);
@@ -145,12 +181,12 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
       const response = await fetch(`${backendUrl}/api/suggest-params`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           file_id: fileId,
           max_preview_chars: 5000
-        }),
+        })
       });
 
       if (response.ok) {
@@ -200,7 +236,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
       <div className="space-y-2">
         <label htmlFor="model" className="block text-sm font-medium">Model</label>
         <Select
-          disabled={isLoading || availableModels.length === 0}
+          disabled={isLoading || modelOptions.length === 0}
           value={config.model}
           onValueChange={(value) => setConfig(prev => ({ ...prev, model: value }))}
         >
@@ -208,8 +244,8 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
             <SelectValue placeholder="Select model" />
           </SelectTrigger>
           <SelectContent>
-            {availableModels.length > 0 ? (
-              availableModels.map((model) => (
+            {modelOptions.length > 0 ? (
+              modelOptions.map((model) => (
                 <SelectItem key={model.id} value={model.id}>
                   {model.name}
                 </SelectItem>
@@ -405,6 +441,24 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           )}
         </div>
       )}
+
+      {/* Submit and Cancel buttons */}
+      <div className="pt-4 mt-4 border-t border-gray-200 flex justify-end space-x-4">
+        <button
+          onClick={onCancel}
+          className="px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
+          type="button"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => onSubmit(config)}
+          className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
+          type="button"
+        >
+          Process File
+        </button>
+      </div>
     </div>
   );
 };
