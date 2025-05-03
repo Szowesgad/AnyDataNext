@@ -1,0 +1,16 @@
+{
+  "users": [
+    {
+      "username": "admin",
+      "hashed_password": "$2b$12$9INWl5yQKWFmWBqaOI1.JeeUF1B3QlJSUw3KnqoEZB48QwZrUMQxq",
+      "is_active": true,
+      "is_admin": true
+    },
+    {
+      "username": "user",
+      "hashed_password": "$2b$12$HRqbpm6JnWgdP7JHRYqWW.AUVp26NcJK.CCcZ/ATRU/HWlwTY30je",
+      "is_active": true,
+      "is_admin": false
+    }
+  ]
+}
