@@ -128,6 +128,27 @@ We now use dedicated scripts for starting the backend and frontend.
 
 4.  **Access the Application:** Open your web browser and navigate to `http://localhost:3000` (or the port specified by the frontend script).
 
+## 🌐 Accessing on LAN (Local Network)
+
+The backend now automatically detects your local IP address and configures CORS to allow connections from both localhost and your local network:
+
+1. Start both the backend and frontend servers as described above.
+2. Check the backend startup logs to find your local IP address:
+   ```
+   Detected local IP address: 192.168.1.200
+   ```
+3. You can now access the application from other devices on your network:
+   - Backend API: `http://YOUR_LOCAL_IP:8000`
+   - Frontend UI: `http://YOUR_LOCAL_IP:3000`
+
+4. To manually find your IP address:
+   ```bash
+   # On macOS/Linux
+   ifconfig | grep inet
+   # On Windows
+   ipconfig
+   ```
+
 ## 📂 Project Structure
 
 ```
@@ -155,7 +176,10 @@ AnyDataNext/
 │   ├── audit-20250404.md # Project audit document
 │   ├── refactor-20250404.md # Refactoring report
 │   └── ...
-├── .github/            # GitHub specific files (e.g., workflows - if added)
+├── .github/            # GitHub workflows for CI/CD
+│   ├── workflows/      # GitHub Actions workflows
+│   │   ├── build.yml   # Build and test workflow
+│   │   └── server-build.yml # Deployment workflow
 ├── backend-start.sh    # Script to start the backend server
 ├── frontend-start.sh   # Script to start the frontend server
 ├── devstage.md         # Summary of the current development stage
