@@ -20,6 +20,7 @@ import traceback
 import zipfile
 import io
 import pydantic
+import socket
 
 # --- Load environment variables early ---
 from dotenv import load_dotenv
@@ -122,6 +123,24 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# Get local IP address
+def get_local_ip():
+    try:
+        # This creates a socket that doesn't actually connect anywhere
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # This "connects" to Google's DNS server, which forces the socket to determine
+        # which interface would be used to route traffic to the Internet
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except Exception as e:
+        logger.error(f"Error getting local IP: {e}")
+        return "127.0.0.1"  # Fallback to localhost
+
+local_ip = get_local_ip()
+logger.info(f"Detected local IP address: {local_ip}")
+
 # Configure CORS
 # Allow specific origins in production, use wildcard for development if needed
 origins = [
@@ -129,13 +148,15 @@ origins = [
     "http://localhost:3001", # Add port 3001 since frontend started there
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001", # Add port 3001
+    f"http://{local_ip}:3000",
+    f"http://{local_ip}:3001",
     "https://anydata.libraxis.cloud", # Add production frontend URL
     # Add other origins as needed (e.g., staging environment)
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tymczasowo zezwalaj na wszystkie origins
+    allow_origins=origins,  # Allow only specific origins for security
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
@@ -152,6 +173,24 @@ LOGS_DIR = BACKEND_DIR / "logs"
 # Ensure required directories exist
 for dir_path in [UPLOAD_DIR, OUTPUT_DIR, LOGS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
+
+@app.get("/")
+async def root():
+    """
+    Root endpoint for simple API check.
+    """
+    return JSONResponse(content={
+        "message": "AnyDataNext API is running",
+        "version": "1.0.0",
+        "status": "active",
+        "local_ip": local_ip,
+        "endpoints": {
+            "upload": "/api/upload",
+            "process": "/api/process",
+            "status": "/api/status",
+            "websocket": "/ws/{client_id}"
+        }
+    })
 
 @app.post("/api/upload")
 async def upload_file_api(file: UploadFile = File(...)):

@@ -1,41 +1,5 @@
-'use client';
-
 import React, { useState, useEffect } from 'react';
-import { AvailableModels } from '@/types/models'; // Keep type import, path might need user fix
-
-// Import ONLY shadcn/ui Select components
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import SuggestionButton from './SuggestionButton';
-// Removed Textarea, Button, Input imports from shadcn/ui
-
-// --- Helper Types --- 
-interface UploadedFileInfo {
-  fileId: string;
-  originalFilename: string;
-  size: number;
-}
-
-interface Suggestions {
-  suggested_keywords: string[];
-  suggested_system_prompt: string;
-}
-
-interface ModelInfo {
-  id: string;
-  name?: string;
-}
-
-interface ProviderInfo {
-  provider: string;
-  name: string;
-  models: ModelInfo[];
-  env_key?: string;
-  list_endpoint?: string;
-}
-
-interface AvailableModelsResponse {
-  [providerKey: string]: ProviderInfo;
-}
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 
 interface ProcessingConfig {
   provider: string;
@@ -50,383 +14,399 @@ interface ProcessingConfig {
   outputFormat?: string;
 }
 
-// --- Component Props --- 
-interface ProcessingConfiguratorProps {
-  originalFilename: string;
-  initialKeywords?: string[];
-  initialLanguage?: string; // Keep prop, even if unused for now
-  onSubmit: (config: ProcessingConfig) => void;
-  onCancel: () => void;
-  backendUrl: string; // Re-added for suggestion API
-  availableModels: AvailableModels | null; // Use the prop
-  isLoadingModels: boolean; // Use the prop
-  fileId: string; // Added to support suggestion API
+interface ProviderModel {
+  id: string;
+  name: string;
+  maxTokens?: number;
 }
 
-// --- Component --- 
+interface ModelData {
+  [provider: string]: {
+    name: string;
+    models: ProviderModel[];
+  };
+}
+
+interface ProcessingConfiguratorProps {
+  config: ProcessingConfig;
+  setConfig: React.Dispatch<React.SetStateAction<ProcessingConfig>>;
+  modelData: ModelData | null;
+  isLoading: boolean;
+  backendUrl: string;
+  fileId?: string;
+}
+
 const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
-  originalFilename,
-  initialKeywords = [],
-  initialLanguage = 'pl', // Default value used if needed later
-  onSubmit,
-  onCancel,
+  config,
+  setConfig,
+  modelData,
+  isLoading,
   backendUrl,
-  availableModels, // Use prop
-  isLoadingModels, // Use prop
-  fileId,
+  fileId
 }) => {
-  // --- State --- 
-  const [selectedProvider, setSelectedProvider] = useState<string>('');
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  const [temperature, setTemperature] = useState<number>(0.7);
-  const [maxTokens, setMaxTokens] = useState<number | undefined>(undefined);
-  const [systemPrompt, setSystemPrompt] = useState<string>('');
-  const [keywords, setKeywords] = useState<string>(initialKeywords.join(', '));
-  const [language, setLanguage] = useState<string>(initialLanguage); // Keep language state if needed
-  const [processingType, setProcessingType] = useState<string>('standard');
-  const [addReasoning, setAddReasoning] = useState<boolean>(false);
-  const [outputFormat, setOutputFormat] = useState<string>('json');
-  
-  // Removed the useState for isProcessing as it seems handled by parent or unused
-  const [errorMessage, setErrorMessage] = useState<string | null>(null); // Keep error message state
+  const [availableModels, setAvailableModels] = useState<ProviderModel[]>([]);
+  const [keywordsInput, setKeywordsInput] = useState<string>('');
+  const [suggestedKeywords, setSuggestedKeywords] = useState<string[]>([]);
+  const [suggestedPrompt, setSuggestedPrompt] = useState<string>('');
+  const [isSuggesting, setIsSuggesting] = useState<boolean>(false);
 
-  // --- Effects --- 
-  // REMOVED useEffect for fetching models (lines approx 89-123)
+  // Processing type options
+  const [processingType, setProcessingType] = useState<string>(config.processingType || 'standard');
+  const [language, setLanguage] = useState<string>(config.language || 'pl');
+  const [addReasoning, setAddReasoning] = useState<boolean>(config.addReasoning || false);
+  const [outputFormat, setOutputFormat] = useState<string>(config.outputFormat || 'json');
 
-  // Initialize form fields - simplified, only keywords and language might be needed from props now
+  // Update available models when provider changes or modelData loads
   useEffect(() => {
-      // Initialize keywords from props
-      setKeywords(initialKeywords.join(', '));
-      // Initialize language from props if different from default
-      setLanguage(initialLanguage);
-  }, [initialKeywords, initialLanguage]); // Dependency array updated
-
-  // Reset model when provider changes - KEEP THIS
-  useEffect(() => {
-    setSelectedModel('');
-    // Clear potential error when provider changes
-    setErrorMessage(null); 
-  }, [selectedProvider]);
-
-  // --- Handlers --- 
-  const handleProviderChange = (value: string) => {
-    setSelectedProvider(value);
-    // No need to set default model here, handled by reset effect
-  };
-
-  const handleModelChange = (value: string) => {
-    setSelectedModel(value);
-  };
-
-  // Renamed handleStartProcessing to handleSubmit to match parent expectation better
-  const handleSubmit = () => { 
-    if (!selectedProvider || !selectedModel) {
-      setErrorMessage('Please select a provider and model.');
-      return;
+    if (modelData && config.provider) {
+      const providerInfo = modelData[config.provider];
+      if (providerInfo && Array.isArray(providerInfo.models)) {
+        setAvailableModels(providerInfo.models);
+        
+        // If we haven't selected a model yet, or the selected model isn't available
+        // for this provider, select the first available model
+        const modelExists = providerInfo.models.some(m => m.id === config.model);
+        if (!config.model || !modelExists) {
+          if (providerInfo.models.length > 0) {
+            setConfig(prev => ({
+              ...prev,
+              model: providerInfo.models[0].id
+            }));
+          }
+        }
+      } else {
+        setAvailableModels([]);
+      }
     }
-    setErrorMessage(null); // Clear error on successful validation
+  }, [config.provider, modelData]);
 
-    const keywordsList = keywords
+  // Update processingType, language, addReasoning, and outputFormat config values when they change
+  useEffect(() => {
+    setConfig(prev => ({
+      ...prev,
+      processingType,
+      language,
+      addReasoning,
+      outputFormat
+    }));
+  }, [processingType, language, addReasoning, outputFormat]);
+
+  // Parse keywords from comma-separated string to array when updating
+  const handleKeywordsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setKeywordsInput(value);
+    
+    // Parse comma-separated keywords into array
+    const keywordsArray = value
       .split(',')
       .map(k => k.trim())
-      .filter(k => k !== '');
-
-    const config: ProcessingConfig = {
-      provider: selectedProvider,
-      model: selectedModel,
-      systemPrompt: systemPrompt || undefined, // Send undefined if empty
-      keywords: keywordsList.length > 0 ? keywordsList : undefined, // Send undefined if empty
-      temperature: temperature,
-      maxTokens: maxTokens,
-      language: language,
-      processingType: processingType,
-      addReasoning: addReasoning,
-      outputFormat: outputFormat
-    };
-
-    console.log("Submitting processing configuration:", config);
-    onSubmit(config); // Call the actual onSubmit prop
+      .filter(k => k.length > 0);
+    
+    setConfig(prev => ({
+      ...prev,
+      keywords: keywordsArray
+    }));
   };
 
-  // Renamed onCancel prop handler for clarity
-  const handleCancel = () => { 
-    onCancel();
+  // Set keywords from suggestion
+  const applySuggestedKeywords = () => {
+    if (suggestedKeywords.length > 0) {
+      const keywordsString = suggestedKeywords.join(', ');
+      setKeywordsInput(keywordsString);
+      setConfig(prev => ({
+        ...prev,
+        keywords: suggestedKeywords
+      }));
+    }
   };
 
-  // --- Render Logic --- 
-  // Use isLoadingModels prop directly
-  if (isLoadingModels) { 
-    return <div className="text-center p-10">Loading model configuration...</div>;
-  }
+  // Set system prompt from suggestion
+  const applySuggestedPrompt = () => {
+    if (suggestedPrompt) {
+      setConfig(prev => ({
+        ...prev,
+        systemPrompt: suggestedPrompt
+      }));
+    }
+  };
 
-  // Handle error state based on props and internal state
-  if (!availableModels && !isLoadingModels) { // Check only if not loading and models are null
-      // Use internal errorMessage if set, otherwise show generic message
-      return <div className="text-center p-10 text-red-600">Error loading configuration: {errorMessage || 'Model data is unavailable.'}</div>;
-  }
-  
-  // Ensure availableModels is not null before proceeding (TypeScript guard)
-  if (!availableModels) {
-      return <div className="text-center p-10 text-gray-500">Model configuration data is missing.</div>;
-  }
+  // Apply all suggestions
+  const applyAllSuggestions = () => {
+    applySuggestedKeywords();
+    applySuggestedPrompt();
+  };
 
+  // Get suggestions from the backend
+  const getSuggestions = async () => {
+    if (!fileId || !backendUrl) return;
 
-  const providerOptions = Object.keys(availableModels); // Simpler now
-  
-  // Use the CORRECTED logic based on logs (array of strings)
-  const modelOptions: string[] = (selectedProvider && availableModels[selectedProvider]?.models)
-                                 ? availableModels[selectedProvider].models as string[] // Assuming backend sends string[] now
-                                 : [];
+    setIsSuggesting(true);
+    try {
+      const response = await fetch(`${backendUrl}/api/suggest-params`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          file_id: fileId,
+          max_preview_chars: 5000
+        }),
+      });
 
+      if (response.ok) {
+        const data = await response.json();
+        setSuggestedKeywords(data.suggested_keywords || []);
+        setSuggestedPrompt(data.suggested_system_prompt || '');
+      } else {
+        console.error('Failed to get suggestions:', await response.text());
+      }
+    } catch (error) {
+      console.error('Error getting suggestions:', error);
+    } finally {
+      setIsSuggesting(false);
+    }
+  };
 
   return (
-    <div className="p-6 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-850 shadow-md">
-      <h2 className="text-xl font-semibold mb-6 text-center border-b dark:border-gray-700 pb-3 text-gray-800 dark:text-gray-200">2. Configure Processing</h2>
-
-      {/* Display internal error message if any */}
-      {errorMessage && (
-         <div className="mb-4 p-3 border border-red-200 bg-red-50 dark:bg-red-900/20 rounded text-red-600 dark:text-red-400 text-sm">
-            Error: {errorMessage}
-         </div>
-      )}
-
-      {/* File Info */} 
-      <div className="mb-4 p-3 bg-gray-100 dark:bg-gray-800 border dark:border-gray-700 rounded">
-          <p className="text-sm text-gray-700 dark:text-gray-300"><strong>File:</strong> {originalFilename}</p>
+    <div className="space-y-4 p-4 border rounded-lg bg-card shadow">
+      <h3 className="text-lg font-medium">Processing Configuration</h3>
+      
+      {/* Provider Selection */}
+      <div className="space-y-2">
+        <label htmlFor="provider" className="block text-sm font-medium">Provider</label>
+        <Select
+          disabled={isLoading}
+          value={config.provider}
+          onValueChange={(value) => setConfig(prev => ({ ...prev, provider: value }))}
+        >
+          <SelectTrigger id="provider" className="w-full">
+            <SelectValue placeholder="Select provider" />
+          </SelectTrigger>
+          <SelectContent>
+            {modelData ? (
+              Object.keys(modelData).map((providerKey) => (
+                <SelectItem key={providerKey} value={providerKey}>
+                  {modelData[providerKey].name}
+                </SelectItem>
+              ))
+            ) : (
+              <SelectItem value="loading" disabled>Loading providers...</SelectItem>
+            )}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Model Selection */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        <div>
-          <label htmlFor="provider-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model Provider</label>
-          <Select 
-             value={selectedProvider} 
-             onValueChange={handleProviderChange}
-             disabled={providerOptions.length === 0}
-          >
-            <SelectTrigger id="provider-select" className="w-full text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600">
-              <SelectValue placeholder="Select a provider..." />
-            </SelectTrigger>
-            <SelectContent className="bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100">
-              {providerOptions.length === 0 ? (
-                  <SelectItem value="" disabled>No providers available</SelectItem>
-              ) : (
-                  providerOptions.map(key => (
-                      <SelectItem key={key} value={key}>
-                          {availableModels[key]?.name || key} {/* Display name or key */}
-                      </SelectItem>
-                  ))
-              )}
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <label htmlFor="model-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model</label>
-          <Select 
-            value={selectedModel} 
-            onValueChange={handleModelChange}
-            disabled={!selectedProvider || modelOptions.length === 0}
-          >
-            <SelectTrigger id="model-select" className="w-full text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600">
-              <SelectValue placeholder={!selectedProvider ? "Select provider first" : "Select a model..."} /> {/* Updated placeholder */}
-            </SelectTrigger>
-            <SelectContent> {/* Removed extra classes, use default shadcn styling */}
-              {modelOptions.length > 0 ? (
-                // Use the CORRECTED mapping
-                modelOptions.map((modelString) => (
-                  <SelectItem key={modelString} value={modelString}>
-                    {modelString}
-                  </SelectItem>
-                ))
-              ) : (
-                <SelectItem value="no-models" disabled>No models available</SelectItem> /* Simplified message */
-              )}
-            </SelectContent>
-          </Select>
-        </div>
+      <div className="space-y-2">
+        <label htmlFor="model" className="block text-sm font-medium">Model</label>
+        <Select
+          disabled={isLoading || availableModels.length === 0}
+          value={config.model}
+          onValueChange={(value) => setConfig(prev => ({ ...prev, model: value }))}
+        >
+          <SelectTrigger id="model" className="w-full">
+            <SelectValue placeholder="Select model" />
+          </SelectTrigger>
+          <SelectContent>
+            {availableModels.length > 0 ? (
+              availableModels.map((model) => (
+                <SelectItem key={model.id} value={model.id}>
+                  {model.name}
+                </SelectItem>
+              ))
+            ) : (
+              <SelectItem value="loading" disabled>
+                {isLoading ? 'Loading models...' : 'No models available'}
+              </SelectItem>
+            )}
+          </SelectContent>
+        </Select>
       </div>
 
-      {/* AI Suggestions Button */}
-      <div className="mb-6 flex justify-end">
-        <SuggestionButton 
-          backendUrl={backendUrl}
-          fileId={fileId}
-          onSuggestionsReceived={(suggestedKeywords, suggestedPrompt) => {
-            if (suggestedKeywords.length > 0) {
-              setKeywords(suggestedKeywords.join(', '));
-            }
-            if (suggestedPrompt) {
-              setSystemPrompt(suggestedPrompt);
-            }
-          }}
-        />
-      </div>
-
-      {/* System Prompt - USE STANDARD TEXTAREA */}
-      <div className="mb-4">
-        <label htmlFor="systemPrompt" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">System Prompt (Optional)</label>
-        <textarea
-          id="systemPrompt"
-          value={systemPrompt}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setSystemPrompt(e.target.value)}
-          placeholder="Enter custom instructions for the AI... (uses default if blank)"
-          className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
-          rows={3}
-        />
-      </div>
-
-      {/* Keywords - USE STANDARD INPUT */}
-      <div className="mb-4">
-        <label htmlFor="keywords" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Keywords (Optional, comma-separated)</label>
-        <input
-          id="keywords"
-          type="text"
-          value={keywords}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setKeywords(e.target.value)}
-          placeholder="e.g., ai, dataset, veterinary"
-          className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
-        />
-      </div>
-
-      {/* Processing Type & Options */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <div>
-          <label htmlFor="processingType" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Processing Type</label>
-          <select
-            id="processingType"
-            value={processingType}
-            onChange={(e) => setProcessingType(e.target.value)}
-            className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
-          >
-            <option value="standard">Standard Processing</option>
-            <option value="article">Article Processing</option>
-            <option value="translate">Translation Processing</option>
-          </select>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Type of processing to perform</p>
-        </div>
-        <div>
-          <label htmlFor="outputFormat" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Output Format</label>
-          <select
-            id="outputFormat"
-            value={outputFormat}
-            onChange={(e) => setOutputFormat(e.target.value)}
-            className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
-          >
-            <option value="json">JSON</option>
-            <option value="jsonl">JSONL (JSON Lines)</option>
-          </select>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Format of the output file</p>
-        </div>
+      {/* Processing Type Selection */}
+      <div className="space-y-2">
+        <label htmlFor="processingType" className="block text-sm font-medium">Processing Type</label>
+        <Select
+          value={processingType}
+          onValueChange={setProcessingType}
+        >
+          <SelectTrigger id="processingType" className="w-full">
+            <SelectValue placeholder="Select processing type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="standard">Standard</SelectItem>
+            <SelectItem value="article">Article</SelectItem>
+            <SelectItem value="translate">Translate</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Language Selection */}
-      <div className="mb-6">
-        <label htmlFor="language" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Language</label>
-        <select
-          id="language"
+      <div className="space-y-2">
+        <label htmlFor="language" className="block text-sm font-medium">Language</label>
+        <Select
           value={language}
-          onChange={(e) => setLanguage(e.target.value)}
-          className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
+          onValueChange={setLanguage}
         >
-          <option value="pl">Polish</option>
-          <option value="en">English</option>
-        </select>
-        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Primary language for prompts and responses</p>
+          <SelectTrigger id="language" className="w-full">
+            <SelectValue placeholder="Select language" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="pl">Polish</SelectItem>
+            <SelectItem value="en">English</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
-      {/* Advanced Options */}
-      <div className="mb-6">
-        <div className="flex items-center mb-2">
-          <input
-            id="addReasoning"
-            type="checkbox"
-            checked={addReasoning}
-            onChange={(e) => setAddReasoning(e.target.checked)}
-            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-          />
-          <label htmlFor="addReasoning" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
-            Include Reasoning (adds explanation why answer is correct)
-          </label>
-        </div>
-        <p className="text-xs text-gray-500 dark:text-gray-400">This will add an additional 'reasoning' field to each generated record</p>
-      </div>
-
-      {/* Generation Parameters */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <div>
-          <label htmlFor="temperature" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Temperature</label>
-          <input
-            id="temperature"
-            type="number"
-            min="0"
-            max="2"
-            step="0.1"
-            value={temperature}
-            onChange={(e) => setTemperature(parseFloat(e.target.value))}
-            className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
-          />
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Controls randomness (0.0-2.0)</p>
-        </div>
-        <div>
-          <label htmlFor="maxTokens" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Max Tokens</label>
-          <input
-            id="maxTokens"
-            type="number"
-            min="100"
-            max="100000"
-            step="100"
-            value={maxTokens || ''}
-            onChange={(e) => setMaxTokens(e.target.value ? parseInt(e.target.value, 10) : undefined)}
-            placeholder="Default: Model-specific"
-            className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
-          />
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Maximum response length</p>
-        </div>
-      </div>
-
-      {/* Action Buttons - USE STANDARD BUTTONS */}
-      <div className="mt-8 flex justify-end gap-4">
-        <button
-          type="button"
-          onClick={handleCancel} // Use the correct handler name
-          className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
-          // Removed disabled={isProcessing} as isProcessing state was removed
+      {/* Output Format Selection */}
+      <div className="space-y-2">
+        <label htmlFor="outputFormat" className="block text-sm font-medium">Output Format</label>
+        <Select
+          value={outputFormat}
+          onValueChange={setOutputFormat}
         >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={handleSubmit} // Use the correct handler name
-          className="px-4 py-2 border border-transparent rounded text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
-          // Disable button if loading, or no provider/model selected
-          disabled={isLoadingModels || !selectedProvider || !selectedModel} 
-        >
-          {/* Simplified button text */}
-          Submit Configuration 
-        </button>
+          <SelectTrigger id="outputFormat" className="w-full">
+            <SelectValue placeholder="Select output format" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="json">JSON</SelectItem>
+            <SelectItem value="jsonl">JSONL</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
+      {/* Add Reasoning Toggle */}
+      <div className="flex items-center space-x-2">
+        <input
+          type="checkbox"
+          id="addReasoning"
+          checked={addReasoning}
+          onChange={(e) => setAddReasoning(e.target.checked)}
+          className="w-4 h-4"
+        />
+        <label htmlFor="addReasoning" className="text-sm font-medium">Add Reasoning</label>
+      </div>
+
+      {/* System Prompt */}
+      <div className="space-y-2">
+        <div className="flex justify-between">
+          <label htmlFor="systemPrompt" className="block text-sm font-medium">System Prompt</label>
+          {suggestedPrompt && (
+            <button 
+              onClick={applySuggestedPrompt}
+              className="text-xs text-blue-600 hover:text-blue-800"
+              type="button"
+            >
+              Apply Suggestion
+            </button>
+          )}
+        </div>
+        <textarea
+          id="systemPrompt"
+          value={config.systemPrompt || ''}
+          onChange={(e) => setConfig(prev => ({ ...prev, systemPrompt: e.target.value }))}
+          className="w-full px-3 py-2 border rounded-md text-sm"
+          rows={3}
+          placeholder="Enter instructions for the model"
+        />
+        {suggestedPrompt && (
+          <div className="text-xs italic text-gray-600 border-l-2 border-gray-300 pl-2">
+            Suggestion: {suggestedPrompt}
+          </div>
+        )}
+      </div>
+
+      {/* Keywords */}
+      <div className="space-y-2">
+        <div className="flex justify-between">
+          <label htmlFor="keywords" className="block text-sm font-medium">Keywords</label>
+          {suggestedKeywords.length > 0 && (
+            <button 
+              onClick={applySuggestedKeywords}
+              className="text-xs text-blue-600 hover:text-blue-800"
+              type="button"
+            >
+              Apply Suggestion
+            </button>
+          )}
+        </div>
+        <input
+          id="keywords"
+          type="text"
+          value={keywordsInput}
+          onChange={handleKeywordsChange}
+          className="w-full px-3 py-2 border rounded-md text-sm"
+          placeholder="Enter keywords separated by commas"
+        />
+        {suggestedKeywords.length > 0 && (
+          <div className="text-xs italic text-gray-600 border-l-2 border-gray-300 pl-2">
+            Suggestions: {suggestedKeywords.join(', ')}
+          </div>
+        )}
+      </div>
+
+      {/* Temperature Slider */}
+      <div className="space-y-2">
+        <label htmlFor="temperature" className="block text-sm font-medium">
+          Temperature: {config.temperature?.toFixed(1)}
+        </label>
+        <input
+          id="temperature"
+          type="range"
+          min="0"
+          max="1"
+          step="0.1"
+          value={config.temperature || 0.7}
+          onChange={(e) => setConfig(prev => ({ ...prev, temperature: parseFloat(e.target.value) }))}
+          className="w-full"
+        />
+      </div>
+
+      {/* Max Tokens */}
+      <div className="space-y-2">
+        <label htmlFor="maxTokens" className="block text-sm font-medium">Max Tokens</label>
+        <input
+          id="maxTokens"
+          type="number"
+          value={config.maxTokens || ''}
+          onChange={(e) => {
+            const value = e.target.value ? parseInt(e.target.value) : undefined;
+            setConfig(prev => ({ ...prev, maxTokens: value }));
+          }}
+          className="w-full px-3 py-2 border rounded-md text-sm"
+          placeholder="Leave empty for model default"
+        />
+      </div>
+
+      {/* Suggestions buttons */}
+      {fileId && (
+        <div className="pt-2 flex space-x-2 justify-end">
+          <button
+            onClick={getSuggestions}
+            disabled={isSuggesting || !fileId}
+            className={`px-3 py-1 text-sm rounded-md ${
+              isSuggesting 
+                ? 'bg-gray-200 text-gray-500' 
+                : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+            type="button"
+          >
+            {isSuggesting ? 'Getting Suggestions...' : 'Get Suggestions'}
+          </button>
+          
+          {(suggestedKeywords.length > 0 || suggestedPrompt) && (
+            <button
+              onClick={applyAllSuggestions}
+              className="px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700"
+              type="button"
+            >
+              Apply All
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };
 
 export default ProcessingConfigurator;
-
-
-// Helper function to get display name for provider ID - KEEP THIS
-function getProviderDisplayName(providerId: string): string {
-  // Check if availableModels prop has the provider data
-  // This function needs access to availableModels, maybe pass it as arg or define inside component?
-  // For now, use a static map as before, but this is less dynamic
-  const staticMap: { [key: string]: string } = {
-    anthropic: "Claude (Anthropic)",
-    openai: "OpenAI (GPT)",
-    deepseek: "DeepSeek",
-    lmstudio: "LM Studio (Local)",
-    xai: "xAI (Grok)",
-    openrouter: "OpenRouter (Various)"
-    // Add other providers as needed
-  };
-  // Ideally fetch name from availableModels[providerId]?.name if possible
-  return staticMap[providerId] || providerId; 
-}
