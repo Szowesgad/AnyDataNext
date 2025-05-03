@@ -92,3 +92,16 @@ out/
 # But we DO track the example data files
 !/backend/data/
 CLAUDE.md
+
+# Claude Code related files
+.claude/
+**/.claude/settings.local.json
+
+# Terminal output files
+Terminal Saved Output*.txt
+
+# Experimental frontend dirs
+frontend-next/package-lock.json
+
+# Incorrect path entries
+home/user/Anydatanext/
