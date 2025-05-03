@@ -68,7 +68,9 @@ export default function Home() {
 
   const ws = useRef<WebSocket | null>(null);
 
+  // Use environment variable for backend URL with dynamic display
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+  const [displayBackendUrl, setDisplayBackendUrl] = useState<string>(backendUrl);
   // Jawnie konstruuj URL websocketa
   const websocketUrl = backendUrl.includes('https://') 
     ? backendUrl.replace('https://', 'wss://') 
@@ -112,15 +114,41 @@ export default function Home() {
     console.log(`Monitoring job: ${jobId}`);
     
     // Close existing connection if any
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.close();
+    if (ws.current) {
+      try {
+        if (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING) {
+          ws.current.close(1000, "Normal closure");
+        }
+      } catch (e) {
+        console.error("Error closing existing WebSocket:", e);
+      }
+      ws.current = null;
     }
     
-    // Create new connection
-    const socket = new WebSocket(wsUrl);
-    ws.current = socket;
-    
-    return socket;
+    // Create new connection with error handling
+    try {
+      const socket = new WebSocket(wsUrl);
+      ws.current = socket;
+
+      // Send job ID when connection opens
+      socket.onopen = () => {
+        console.log("WebSocket connection established");
+        // Try to send job ID to help with routing on the server
+        try {
+          socket.send(JSON.stringify({
+            type: "register",
+            job_id: jobId
+          }));
+        } catch (e) {
+          console.warn("Failed to send job registration message:", e);
+        }
+      };
+      
+      return socket;
+    } catch (e) {
+      console.error("Error creating WebSocket:", e);
+      return null;
+    }
   };
 
   // Maximum number of reconnection attempts
@@ -175,24 +203,49 @@ export default function Home() {
     let statusCheckInterval: NodeJS.Timeout | null = null;
     
     if (isProcessing && currentJobId) {
-      // Set up regular status checks as backup to WebSocket
-      statusCheckInterval = setInterval(() => {
-        checkJobStatus(currentJobId);
-      }, 5000); // Check every 5 seconds
+      console.log(`Setting up monitoring for job: ${currentJobId}`);
       
+      // Set up regular status checks as backup to WebSocket
+      // This is crucial for reliable status updates if WebSocket fails
+      statusCheckInterval = setInterval(async () => {
+        const completed = await checkJobStatus(currentJobId);
+        
+        // If job completed via REST check, we can stop polling
+        if (completed) {
+          console.log('Job completed via REST API check, clearing interval');
+          if (statusCheckInterval) {
+            clearInterval(statusCheckInterval);
+            statusCheckInterval = null;
+          }
+        }
+      }, 3000); // Check every 3 seconds
+      
+      // Set up WebSocket connection
       const socket = setupWebSocket(currentJobId);
+      
+      // Check if socket was created successfully
+      if (!socket) {
+        console.warn('Failed to create WebSocket, will rely on REST API status checks');
+        setStatusText('Using backup connection method for updates...');
+        return;
+      }
 
+      // Override the onopen handler we set in setupWebSocket
       socket.onopen = () => {
         console.log('WebSocket Connected');
-        setStatusText('WebSocket Connected. Waiting for updates...');
+        setStatusText('Connected to server. Waiting for updates...');
         // Reset reconnect attempts on successful connection
         reconnectAttempts = 0;
       };
 
       socket.onmessage = (event) => {
         try {
+          // Log raw message for debugging
+          console.log('Raw WebSocket message:', event.data);
+          
+          // Try to parse as JSON
           const message = JSON.parse(event.data);
-          console.log('WebSocket Message:', message);
+          console.log('WebSocket Message (parsed):', message);
 
           // Debug information
           console.log('Current job ID:', currentJobId);
@@ -237,19 +290,27 @@ export default function Home() {
             setStatusText('Processing Failed');
             setProcessingProgress(0);
             setIsProcessing(false);
+          } else if (message.type === 'ping') {
+            console.log('Received ping from server');
+            // Try to send pong back to keep connection alive
+            try {
+              socket.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+            } catch (e) {
+              console.warn('Failed to send pong response');
+            }
           }
         } catch (e) {
           console.error('Failed to parse WebSocket message:', event.data, e);
-          setError('Received invalid message from server.');
+          // Don't set error for the user on parse failures, as this could be a benign issue
+          console.warn('Received message that could not be parsed');
         }
       };
 
       socket.onerror = (event) => {
         console.error('WebSocket Error:', event);
-        setError('WebSocket connection error. Please check the backend.');
-        setStatusText('WebSocket Error');
-        // Don't set isProcessing to false here - we'll let the onclose handler
-        // try to reconnect first if possible
+        console.log('Will rely on REST API backup for status updates');
+        // Don't show error to user immediately, as we have the REST API backup
+        setStatusText('Using backup connection for updates...');
       };
 
       socket.onclose = (event) => {
@@ -267,7 +328,7 @@ export default function Home() {
           if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttempts++;
             console.log(`WebSocket disconnected. Attempting reconnect ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`);
-            setStatusText(`Connection lost. Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+            setStatusText(`Using backup connection. Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
             
             // Schedule reconnection attempt
             reconnectTimeout = setTimeout(() => {
@@ -276,11 +337,10 @@ export default function Home() {
               }
             }, RECONNECT_INTERVAL);
           } else {
-            // Max reconnect attempts reached, show error
-            console.error('WebSocket reconnection failed after maximum attempts');
-            setError('WebSocket connection lost and reconnection failed. Processing status unknown.');
-            setStatusText('Connection lost permanently');
-            // Keep isProcessing true to allow user to manually check status or restart
+            // Max reconnect attempts reached, but don't show error as we have REST backup
+            console.warn('WebSocket reconnection failed after maximum attempts');
+            setStatusText('Using polling for status updates...');
+            // We DON'T set an error here since we're still getting updates via REST API
           }
         }
       };
@@ -373,12 +433,11 @@ export default function Home() {
       }
 
       // Dodaj nagłówki CORS
+      console.log(`Making request to ${backendUrl}${endpoint} with payload:`, payload);
       const response = await axios.post(`${backendUrl}${endpoint}`, payload, {
         headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-        withCredentials: false, // Wyłącz przesyłanie credentiali
+          'Content-Type': 'application/json'
+        }
       });
 
       // Accept status 200, 201, or 202 (accepted)
@@ -511,6 +570,27 @@ export default function Home() {
       </div>
 
       <div className="w-full max-w-4xl bg-white dark:bg-gray-850 shadow-xl rounded-lg p-6 md:p-8">
+        {/* Display backend server info */}
+        <div className="mb-4 text-xs text-gray-500 dark:text-gray-400 flex justify-between items-center">
+          <span>Server: {displayBackendUrl}</span>
+          <button
+            onClick={() => {
+              // Copy backend URL to clipboard
+              navigator.clipboard.writeText(backendUrl);
+              // Show a brief message that it was copied
+              const originalText = displayBackendUrl;
+              setDisplayBackendUrl('Copied to clipboard!');
+              setTimeout(() => setDisplayBackendUrl(originalText), 2000);
+            }}
+            className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+            title="Copy server URL"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </button>
+        </div>
+        
         {error && (
           <div className="mb-6 p-4 bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-200 rounded">
             <p className="font-bold">Error:</p>
@@ -532,17 +612,20 @@ export default function Home() {
         )}
 
         {showConfigurator && uploadedFileInfo && (
-          <ProcessingConfigurator
-            originalFilename={uploadedFileInfo.originalFilename}
-            initialKeywords={uploadedFileInfo.keywords}
-            initialLanguage={uploadedFileInfo.language}
-            onSubmit={handleConfigureAndProcess}
-            onCancel={handleCancel}
-            backendUrl={backendUrl}
-            availableModels={availableModels}
-            isLoadingModels={isLoadingModels}
-            fileId={uploadedFileInfo.fileId}
-          />
+          <div>
+            <h3 className="text-sm text-blue-600 dark:text-blue-400 mb-2">Using server: {backendUrl}</h3>
+            <ProcessingConfigurator
+              originalFilename={uploadedFileInfo.originalFilename}
+              initialKeywords={uploadedFileInfo.keywords}
+              initialLanguage={uploadedFileInfo.language}
+              onSubmit={handleConfigureAndProcess}
+              onCancel={handleCancel}
+              backendUrl={backendUrl}
+              availableModels={availableModels}
+              isLoadingModels={isLoadingModels}
+              fileId={uploadedFileInfo.fileId}
+            />
+          </div>
         )}
 
         {isProcessing && (

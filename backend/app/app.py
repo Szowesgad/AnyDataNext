@@ -142,21 +142,25 @@ local_ip = get_local_ip()
 logger.info(f"Detected local IP address: {local_ip}")
 
 # Configure CORS
-# Allow specific origins in production, use wildcard for development if needed
-origins = [
-    "http://localhost:3000",
-    "http://localhost:3001", # Add port 3001 since frontend started there
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001", # Add port 3001
-    f"http://{local_ip}:3000",
-    f"http://{local_ip}:3001",
-    "https://anydata.libraxis.cloud", # Add production frontend URL
-    # Add other origins as needed (e.g., staging environment)
-]
+# DEVELOPMENT MODE: Allow all origins for network testing (change back for production)
+# Uncomment the specific origins list and comment out the wildcard when going to production
+origins = ["*"]  # Allow all origins during development/network testing
+
+# Production configuration (keep for reference)
+# origins = [
+#     "http://localhost:3000",
+#     "http://localhost:3001", # Add port 3001 since frontend started there
+#     "http://127.0.0.1:3000",
+#     "http://127.0.0.1:3001", # Add port 3001
+#     f"http://{local_ip}:3000",
+#     f"http://{local_ip}:3001",
+#     "https://anydata.libraxis.cloud", # Add production frontend URL
+#     # Add other origins as needed (e.g., staging environment)
+# ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Allow only specific origins for security
+    allow_origins=origins,  # Using wildcard for development/testing
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
@@ -706,6 +710,111 @@ async def get_job_status_api(job_id: str, request: Request):
         return JSONResponse(content=active_jobs[job_id])
     else:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+@app.get("/api/datasets")
+async def list_datasets_api():
+    """
+    List all available processed datasets in the system.
+    
+    Returns:
+        JSON response with a list of available datasets, their metadata and access URLs.
+    """
+    try:
+        # Get all folders in the 'ready' directory
+        datasets = []
+        for dataset_dir in Path(OUTPUT_DIR).glob("*"):
+            if not dataset_dir.is_dir():
+                continue
+                
+            dataset_id = dataset_dir.name
+            output_file = dataset_dir / "output.json"
+            
+            if output_file.exists():
+                # Read the first record to get basic metadata
+                first_record = None
+                record_count = 0
+                try:
+                    with open(output_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        record_count = len(data)
+                        if record_count > 0:
+                            first_record = data[0]
+                except Exception as e:
+                    logger.error(f"Error reading dataset {dataset_id}: {e}")
+                
+                # Get created time from directory
+                created_time = dataset_dir.stat().st_mtime
+                
+                datasets.append({
+                    "dataset_id": dataset_id,
+                    "name": f"Dataset {dataset_id[:8]}",
+                    "created_at": created_time,
+                    "created_at_formatted": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(created_time)),
+                    "record_count": record_count,
+                    "source_file": first_record.get("metadata", {}).get("source_file") if first_record else None,
+                    "model_used": first_record.get("metadata", {}).get("model_used") if first_record else None,
+                    "format": "json",
+                    "download_url": f"/api/datasets/{dataset_id}",
+                    "preview_url": f"/api/datasets/{dataset_id}/preview"
+                })
+        
+        # Sort by creation time (newest first)
+        datasets.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+        return JSONResponse(content=datasets)
+    except Exception as e:
+        logger.error(f"Error listing datasets: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error listing datasets: {str(e)}")
+
+@app.get("/api/datasets/{dataset_id}")
+async def get_dataset_api(dataset_id: str):
+    """
+    Get a complete dataset by ID.
+    
+    Args:
+        dataset_id: Dataset identifier.
+        
+    Returns:
+        JSON file with the complete dataset.
+    """
+    dataset_path = OUTPUT_DIR / dataset_id / "output.json"
+    if not dataset_path.exists():
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+    
+    return FileResponse(
+        path=dataset_path,
+        media_type="application/json",
+        filename=f"dataset_{dataset_id}.json"
+    )
+
+@app.get("/api/datasets/{dataset_id}/preview")
+async def preview_dataset_api(dataset_id: str, limit: int = 5):
+    """
+    Get a preview of a dataset with limited records.
+    
+    Args:
+        dataset_id: Dataset identifier.
+        limit: Maximum number of records to return (default: 5)
+        
+    Returns:
+        JSON response with a preview of the dataset.
+    """
+    dataset_path = OUTPUT_DIR / dataset_id / "output.json"
+    if not dataset_path.exists():
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+    
+    try:
+        with open(dataset_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            preview_data = data[:limit]
+            return JSONResponse(content={
+                "dataset_id": dataset_id,
+                "total_records": len(data),
+                "preview_count": len(preview_data),
+                "records": preview_data
+            })
+    except Exception as e:
+        logger.error(f"Error previewing dataset {dataset_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error previewing dataset: {str(e)}")
 
 @app.get("/api/results/{job_id}")
 async def download_job_results_api(job_id: str, request: Request):

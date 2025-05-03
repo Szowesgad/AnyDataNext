@@ -9,6 +9,29 @@ const nextConfig: NextConfig = {
   },
   // Enable React strict mode for better error checking
   reactStrictMode: true,
+  
+  // Add CORS headers to all Next.js API routes and assets
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          {
+            key: 'Access-Control-Allow-Origin',
+            value: '*',
+          },
+          {
+            key: 'Access-Control-Allow-Methods',
+            value: 'GET, POST, PUT, DELETE, OPTIONS',
+          },
+          {
+            key: 'Access-Control-Allow-Headers',
+            value: 'X-Requested-With, Content-Type, Accept',
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

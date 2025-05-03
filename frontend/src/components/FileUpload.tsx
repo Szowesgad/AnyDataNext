@@ -67,7 +67,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
     try {
       const response = await axios.post(`${backendUrl}/api/upload`, formData, {
         headers: {
-          'Content-Type': 'multipart/form-data',
+          'Content-Type': 'multipart/form-data'
         },
         onUploadProgress: (progressEvent) => {
           const percentCompleted = progressEvent.total

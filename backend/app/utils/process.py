@@ -293,6 +293,7 @@ async def process_file(
                 # Attempt to find and parse the JSON array with smarter boundary detection
                 json_start = response.find('[')
                 # Look for balanced closing bracket by counting open/close brackets
+                json_end = 0  # Initialize json_end here to avoid UnboundLocalError
                 if json_start != -1:
                     open_count = 1
                     for i in range(json_start + 1, len(response)):
@@ -303,8 +304,6 @@ async def process_file(
                             if open_count == 0:
                                 json_end = i + 1
                                 break
-                else:
-                    json_end = 0  # No starting bracket found
                 
                 if json_start == -1 or json_end == 0:
                     logger.warning(f"No JSON array found in LLM response for {basename}. Attempting alternative formats.")
