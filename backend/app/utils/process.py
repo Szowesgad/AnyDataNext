@@ -122,12 +122,42 @@ async def process_file(
         importance_json_part = (
             "WAŻNE: Nie dziel krótkich dokumentów. Grupuj powiązane informacje. "
             "Zwróć odpowiedź jako PRAWIDŁOWĄ tablicę JSON obiektów (bez dodatkowych wyjaśnień) o strukturze: "
-            f"[{{ 'instruction': '...', 'prompt': '...', 'completion': '...', {json_reasoning_example}'metadata': {{ 'source_file': '...', 'chunk_index': n, 'total_chunks': m, 'model_used': '...', 'processing_time': '...', 'confidence_score': 0.xx, 'keywords': [...], 'extracted_entities': [...] }} }}]."
+            f"[{{ "
+            f"'instruction': 'PODSUMOWANY konkretny fragment/kontekst z dokumentu...', "
+            f"'prompt': 'Pytanie o pojęcia, definicje lub metody z dokumentu', "
+            f"'completion': 'Wyczerpująca odpowiedź uwzględniająca pełny kontekst', "
+            f"{json_reasoning_example}"
+            f"'metadata': {{ "
+            f"'source_file': '...', "
+            f"'chunk_index': n, "
+            f"'total_chunks': m, "
+            f"'model_used': '...', "
+            f"'processing_time': '...', "
+            f"'confidence_score': 0.xx, "
+            f"'keywords': [...], "
+            f"'extracted_entities': [...] "
+            f"}} "
+            f"}}]."
         )
         importance_json_part_en = (
             "IMPORTANT: Do not divide short documents. Group related info. "
             "Return response as a VALID JSON array of objects (no extra explanations) with structure: "
-            f"[{{ 'instruction': '...', 'prompt': '...', 'completion': '...', {json_reasoning_example}'metadata': {{ 'source_file': '...', 'chunk_index': n, 'total_chunks': m, 'model_used': '...', 'processing_time': '...', 'confidence_score': 0.xx, 'keywords': [...], 'extracted_entities': [...] }} }}]."
+            f"[{{ "
+            f"'instruction': 'SUMMARIZED specific fragment/context from the document...', "
+            f"'prompt': 'Question about concepts, definitions, or methods from the document', "
+            f"'completion': 'Comprehensive answer considering the full context', "
+            f"{json_reasoning_example}"
+            f"'metadata': {{ "
+            f"'source_file': '...', "
+            f"'chunk_index': n, "
+            f"'total_chunks': m, "
+            f"'model_used': '...', "
+            f"'processing_time': '...', "
+            f"'confidence_score': 0.xx, "
+            f"'keywords': [...], "
+            f"'extracted_entities': [...] "
+            f"}} "
+            f"}}]."
         )
 
         # Combine all parts based on language
@@ -151,21 +181,111 @@ async def process_file(
         final_system_prompt = f"{base_system_prompt}\n\n{detailed_instructions}"
 
     elif processing_type == 'article':
-        # Placeholder: Implement logic for article processing
-        logger.warning(f"Processing type '{processing_type}' not fully implemented, using standard logic as fallback.")
-        # Fallback to standard logic for now
-        # TODO: Call or implement article-specific logic from scripts/articles.py idea
-        final_system_prompt = f"{base_system_prompt}\n\nDetailed instructions for article processing would go here."
-        # Need to adapt the expected JSON structure as well
-        pass 
+        # Article-specific processing logic
+        logger.info(f"Using article-specific processing for file: {file_path}")
+        
+        # Import the article processing functionality
+        from app.scripts.articles import convert, extract_article_metadata, extract_article_content
+        
+        # Create article-specific system prompt
+        article_instructions = (
+            "You are an expert in processing scientific and academic articles. "
+            "Your task is to extract key information from this article and structure it into a comprehensive format. "
+            "Pay special attention to:\n"
+            "1. The main thesis and research questions\n"
+            "2. Methodology and approach\n"
+            "3. Key findings and conclusions\n"
+            "4. Implications for the field\n"
+            "5. Extracting relevant technical terminology and concepts\n"
+        )
+        
+        if language == "pl":
+            article_instructions = (
+                "Jesteś ekspertem w przetwarzaniu artykułów naukowych i akademickich. "
+                "Twoim zadaniem jest wydobycie kluczowych informacji z tego artykułu i ustrukturyzowanie ich w kompleksowy format. "
+                "Zwróć szczególną uwagę na:\n"
+                "1. Główną tezę i pytania badawcze\n"
+                "2. Metodologię i podejście\n"
+                "3. Kluczowe ustalenia i wnioski\n"
+                "4. Implikacje dla dziedziny\n"
+                "5. Wyodrębnienie odpowiedniej terminologii technicznej i koncepcji\n"
+            )
+        
+        final_system_prompt = f"{base_system_prompt}\n\n{article_instructions}"
+        
+        try:
+            # We already have the standard process that uses LLM for processing
+            # But for article-specific processing, we can utilize the methods from articles.py
+            
+            # Try to extract article metadata for enriched context
+            article_metadata = {}
+            with open(file_path, 'r', encoding='utf-8') as f:
+                article_text = f.read()
+                article_metadata = extract_article_metadata(article_text)
+                
+            # Add metadata info to the system prompt if available
+            if article_metadata and article_metadata.get("title"):
+                metadata_prompt = f"\nTitle: {article_metadata.get('title')}"
+                if article_metadata.get("authors"):
+                    metadata_prompt += f"\nAuthors: {', '.join(article_metadata.get('authors'))}"
+                if article_metadata.get("abstract"):
+                    metadata_prompt += f"\nAbstract: {article_metadata.get('abstract')}"
+                if article_metadata.get("keywords"):
+                    metadata_prompt += f"\nKeywords: {', '.join(article_metadata.get('keywords'))}"
+                    
+                final_system_prompt += f"\n\nArticle Information:{metadata_prompt}"
+                
+                # Add these keywords to our processing keywords if we have them
+                if article_metadata.get("keywords") and keywords:
+                    keywords.extend(article_metadata.get("keywords"))
+                elif article_metadata.get("keywords"):
+                    keywords = article_metadata.get("keywords")
+                    
+            logger.info(f"Extracted metadata from article: {article_metadata.get('title', 'Unknown')}")
+            
+        except Exception as e:
+            logger.warning(f"Error extracting article metadata: {e}. Will proceed with standard processing.")
+            # Continue with standard processing even if metadata extraction fails 
     elif processing_type == 'translate':
-        # Placeholder: Implement logic for translation
-        logger.warning(f"Processing type '{processing_type}' not fully implemented, using standard logic as fallback.")
-        # Fallback to standard logic for now
-        # TODO: Call or implement translation-specific logic from scripts/translate.py idea
-        final_system_prompt = f"{base_system_prompt}\n\nDetailed instructions for translation processing would go here."
-        # Need to adapt the expected JSON structure as well
-        pass
+        # Translation-specific processing logic
+        logger.info(f"Using translation-specific processing for file: {file_path}")
+        
+        # Import necessary modules
+        import datetime
+        from app.scripts.translate import translate_and_convert
+        
+        # Define target language - default is already set in parameters (language parameter)
+        target_language = language
+        source_language = "auto"  # Auto-detect source language by default
+        
+        # Language mapping for human-readable names
+        language_names = {
+            "en": "English",
+            "pl": "Polish",
+            "de": "German",
+            "fr": "French", 
+            "es": "Spanish",
+            "it": "Italian",
+            "auto": "Auto-detected"
+        }
+        
+        # Create translation-specific system prompt
+        translation_instructions = (
+            f"You are an expert translator. Your task is to translate the given content "
+            f"from {language_names.get(source_language, source_language)} to {language_names.get(target_language, target_language)}. "
+            f"Preserve the meaning, tone, and technical terminology of the original text. "
+            f"For technical documents, prioritize accuracy of terminology over stylistic concerns. "
+            f"For literary or creative content, focus on maintaining the original's style and effect in the target language."
+        )
+        
+        # Combine with user-provided system prompt
+        if system_prompt:
+            final_system_prompt = f"{translation_instructions}\n\n{system_prompt}"
+        else:
+            final_system_prompt = translation_instructions
+            
+        # When we get to the LLM processing section, we'll handle the translation there
+        # The function will use this enhanced system prompt
     else:
         logger.error(f"Unknown processing type: {processing_type}")
         raise ValueError(f"Unsupported processing type: {processing_type}")
@@ -234,12 +354,24 @@ async def process_file(
                 system=final_system_prompt
             )
             
-            # Jeśli nie ma odpowiedzi (None), obsłuż błąd
+            # If there's no response (None), handle the error
             if response is None:
                 logger.error(f"LLM returned None response for {file_path}")
+                
+                # Customize message based on processing type
+                if processing_type == "translate":
+                    instruction = f"Translate content of {basename} to {language}"
+                    prompt = "Nie udało się przetworzyć tłumaczenia dokumentu."
+                elif processing_type == "article":
+                    instruction = f"Extract article information from {basename}"
+                    prompt = "Nie udało się przetworzyć artykułu."
+                else:
+                    instruction = f"Analiza dokumentu {basename}"
+                    prompt = "Nie udało się przetworzyć dokumentu."
+                
                 return [{
-                    "instruction": f"Analiza dokumentu {basename}",
-                    "prompt": "Nie udało się przetworzyć dokumentu.",
+                    "instruction": instruction,
+                    "prompt": prompt,
                     "completion": "API nie zwróciło odpowiedzi. Sprawdź logi błędów.",
                     "metadata": {
                         "source_file": basename,
@@ -248,14 +380,32 @@ async def process_file(
                         "confidence_score": 0.1,
                         "error": "API returned None response",
                         "keywords": [],
-                        "extracted_entities": []
+                        "extracted_entities": [],
+                        "chunk_index": 0,
+                        "total_chunks": 1,
+                        "processing_info": {
+                            "processing_type": processing_type,
+                            "error": True
+                        }
                     }
                 }]
         except Exception as e:
             logger.error(f"Error calling LLM API: {e}")
+            
+            # Customize message based on processing type
+            if processing_type == "translate":
+                instruction = f"Translate content of {basename} to {language}"
+                prompt = "Wystąpił błąd podczas tłumaczenia."
+            elif processing_type == "article":
+                instruction = f"Extract information from article {basename}"
+                prompt = "Wystąpił błąd podczas przetwarzania artykułu."
+            else:
+                instruction = f"Analiza dokumentu {basename}"
+                prompt = "Wystąpił błąd podczas przetwarzania."
+                
             return [{
-                "instruction": f"Analiza dokumentu {basename}",
-                "prompt": "Wystąpił błąd podczas przetwarzania.",
+                "instruction": instruction,
+                "prompt": prompt,
                 "completion": f"Błąd API: {str(e)}",
                 "metadata": {
                     "source_file": basename,
@@ -264,7 +414,13 @@ async def process_file(
                     "confidence_score": 0.1,
                     "error": f"API Exception: {str(e)}",
                     "keywords": [],
-                    "extracted_entities": []
+                    "extracted_entities": [],
+                    "chunk_index": 0,
+                    "total_chunks": 1,
+                    "processing_info": {
+                        "processing_type": processing_type,
+                        "error": True
+                    }
                 }
             }]
 
@@ -365,19 +521,61 @@ async def process_file(
                 if "metadata" not in record or not isinstance(record["metadata"], dict):
                     record["metadata"] = {}
 
-                # Overwrite or set essential metadata
-                record["metadata"] = {
-                    # Preserve existing fields if needed, but ensure these are set
-                    **record.get("metadata", {}), # Keep existing metadata first
+                # Convert old format to new format if needed
+                if "input" in record and "output" in record and "prompt" not in record:
+                    record["prompt"] = record.pop("input")
+                    record["completion"] = record.pop("output")
+                
+                # Ensure we have all the required fields
+                if "prompt" not in record or "completion" not in record:
+                    logger.warning(f"Record missing required fields at index {i} for {basename}")
+                    record["prompt"] = record.get("prompt", "What information is in this document?")
+                    record["completion"] = record.get("completion", "This document contains important information.")
+                
+                # Set instruction field if not present
+                if "instruction" not in record:
+                    if processing_type == "translate":
+                        record["instruction"] = f"Translate content from {basename} to {language}"
+                    else:
+                        record["instruction"] = f"Analyze content of {basename}, chunk {i+1} of {record_count}"
+                
+                # Basic metadata for all processing types
+                base_metadata = {
                     "source_file": basename,
                     "model_used": model,
                     "processing_time": f"{processing_time:.2f}s",
-                    "chunk_index": record.get("metadata", {}).get("chunk_index", i), # Use model's if provided
-                    "total_chunks": record.get("metadata", {}).get("total_chunks", record_count), # Use model's if provided
-                    "confidence_score": record.get("metadata", {}).get("confidence_score", 0.95), # Default confidence
-                    # Keep existing keywords/entities if they exist, otherwise init empty
+                    "chunk_index": record.get("metadata", {}).get("chunk_index", i),
+                    "total_chunks": record.get("metadata", {}).get("total_chunks", record_count),
+                    "confidence_score": record.get("metadata", {}).get("confidence_score", 0.95),
                     "keywords": record.get("metadata", {}).get("keywords", []), 
                     "extracted_entities": record.get("metadata", {}).get("extracted_entities", [])
+                }
+                
+                # Add processing-type specific metadata
+                processing_info = {}
+                if processing_type == "standard":
+                    processing_info = {
+                        "processing_type": "standard"
+                    }
+                elif processing_type == "article":
+                    processing_info = {
+                        "processing_type": "article"
+                    }
+                    # Add article metadata if available from the article-specific processing
+                    if record.get("metadata", {}).get("article_metadata"):
+                        processing_info["article_metadata"] = record.get("metadata", {}).get("article_metadata")
+                elif processing_type == "translate":
+                    processing_info = {
+                        "processing_type": "translate",
+                        "source_language": record.get("metadata", {}).get("source_language", "auto"),
+                        "target_language": language
+                    }
+                    
+                # Merge all metadata
+                record["metadata"] = {
+                    **record.get("metadata", {}),  # Keep existing non-standard metadata
+                    **base_metadata,               # Add/override with standardized base metadata
+                    "processing_info": processing_info  # Add processing-type specific info
                 }
 
             logger.info(f"Successfully processed {file_path}, generated {record_count} records")
@@ -388,9 +586,20 @@ async def process_file(
             logger.debug(f"Raw response snippet: {response[:1000]}...")
 
             # Create a basic fallback record on parsing error
+            # Customize instruction based on processing type
+            if processing_type == "translate":
+                instruction = f"Translate content from {basename} to {language}"
+                prompt = f"What is the translation of this {extension[1:]} document to {language}? Failed to parse AI output."
+            elif processing_type == "article":
+                instruction = f"Extract key information from article {basename}"
+                prompt = f"What are the key points in this article? Failed to parse AI output."
+            else:
+                instruction = f"Analyze the content of {basename}"
+                prompt = f"What are the key points in this {extension[1:]} document? Failed to parse AI output."
+                
             fallback_record = {
-                "instruction": f"Analyze the content of {basename}",
-                "prompt": f"What are the key points in this {extension[1:]} document? Failed to parse AI output.",
+                "instruction": instruction,
+                "prompt": prompt,
                 "completion": f"Error processing document. Failed to parse AI response: {e}",
                 "metadata": {
                     "source_file": basename,
@@ -398,7 +607,15 @@ async def process_file(
                     "processing_time": f"{time.time() - start_time:.2f}s",
                     "confidence_score": 0.3, # Low confidence due to parsing error
                     "error": f"JSON Parsing Error: {e}",
-                    "raw_response_snippet": response[:500] # Include snippet for debugging
+                    "raw_response_snippet": response[:500], # Include snippet for debugging
+                    "chunk_index": 0,
+                    "total_chunks": 1,
+                    "keywords": [],
+                    "extracted_entities": [],
+                    "processing_info": {
+                        "processing_type": processing_type,
+                        "error": True
+                    }
                 }
             }
             if add_reasoning:
@@ -409,9 +626,20 @@ async def process_file(
         error_message = f"Error processing file {file_path}: {type(e).__name__}: {e}"
         logger.error(error_message, exc_info=True)
         # Create a fallback record for general processing errors
+        # Customize based on processing type
+        if processing_type == "translate":
+            instruction = f"Translate the {extension[1:]} file: {basename} to {language}"
+            prompt = f"Can you translate this document to {language}? Processing encountered errors."
+        elif processing_type == "article":
+            instruction = f"Extract key information from article in {basename}"
+            prompt = f"What are the key points and findings in this article? Processing encountered errors."
+        else:
+            instruction = f"Review the {extension[1:]} file: {basename}"
+            prompt = f"An error occurred while trying to process this file."
+            
         return [{
-            "instruction": f"Review the {extension[1:]} file: {basename}",
-            "prompt": f"An error occurred while trying to process this file.",
+            "instruction": instruction,
+            "prompt": prompt,
             "completion": f"Processing failed: {error_message}",
             "metadata": {
                 "source_file": basename,
@@ -420,7 +648,13 @@ async def process_file(
                 "processing_time": f"{time.time() - start_time:.2f}s",
                 "confidence_score": 0.1, # Very low confidence
                 "keywords": [],
-                "extracted_entities": []
+                "extracted_entities": [],
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "processing_info": {
+                    "processing_type": processing_type,
+                    "error": True
+                }
             }
         }]
 

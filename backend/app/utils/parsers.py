@@ -232,13 +232,18 @@ def parse_txt(file_path: str, logger) -> List[Dict[str, Any]]:
                 default_output = "Przedstawione informacje zawierają istotne dane, które można wykorzystać w procesie analizy. Tekst wskazuje na kluczowe aspekty omawianego tematu."
         
         records.append({
-            "instruction": instruction,
-            "input": chunk,
-            "output": default_output,
+            "instruction": instruction if instruction else f"Przeanalizuj fragment {i+1}/{len(chunks)} dokumentu tekstowego",
+            "prompt": "Jakie informacje zawiera ten fragment dokumentu?",
+            "completion": default_output,
             "metadata": {
+                "source_file": os.path.basename(file_path),
                 "chunk_index": i,
                 "total_chunks": len(chunks),
-                "source_file": os.path.basename(file_path)
+                "model_used": "",  # Will be filled in by process.py
+                "processing_time": "",  # Will be filled in by process.py
+                "confidence_score": 0.92,  # Default value
+                "keywords": [],  # Will be extracted later in process.py
+                "extracted_entities": []  # Will be extracted later in process.py
             }
         })
     
@@ -293,14 +298,19 @@ def parse_md(file_path: str, logger) -> List[Dict[str, Any]]:
             default_output += f"W sekcji \"{title}\" przedstawione są kluczowe elementy, które warto uwzględnić w całościowej ocenie zagadnienia."
         
         records.append({
-            "instruction": instruction,
-            "input": chunk,
-            "output": default_output,
+            "instruction": instruction if instruction else f"Przeanalizuj fragment {i+1}/{len(all_chunks)} dokumentu markdown",
+            "prompt": f"Jakie informacje zawiera {title if title else 'ten fragment'} dokumentu?",
+            "completion": default_output,
             "metadata": {
+                "source_file": os.path.basename(file_path),
                 "chunk_index": i,
                 "total_chunks": len(all_chunks),
                 "section_title": title,
-                "source_file": os.path.basename(file_path)
+                "model_used": "",  # Will be filled in by process.py
+                "processing_time": "",  # Will be filled in by process.py
+                "confidence_score": 0.91,  # Default value
+                "keywords": [],  # Will be extracted later in process.py
+                "extracted_entities": []  # Will be extracted later in process.py
             }
         })
     logger.info(f"[parse_md] Created {len(records)} records from markdown file")
@@ -368,12 +378,19 @@ def parse_csv(file_path: str, logger) -> List[Dict[str, Any]]:
             
             if len(row_text) <= MAX_CHUNK_SIZE:
                 parsed_data.append({
-                    "instruction": instruction,
-                    "input": row_text,
-                    "output": output,
+                    "instruction": instruction if instruction else f"Przeanalizuj wiersz {i+1} z pliku CSV",
+                    "prompt": "Jakie informacje zawiera ten wiersz danych?",
+                    "completion": output,
                     "metadata": {
+                        "source_file": os.path.basename(file_path),
                         "row_index": i,
-                        "source_file": os.path.basename(file_path)
+                        "chunk_index": 0,  # Single chunk for this row
+                        "total_chunks": 1,  # Single chunk for this row
+                        "model_used": "",  # Will be filled in by process.py
+                        "processing_time": "",  # Will be filled in by process.py
+                        "confidence_score": 0.93,  # Default value
+                        "keywords": [],  # Will be extracted later in process.py
+                        "extracted_entities": []  # Will be extracted later in process.py
                     }
                 })
             else:
@@ -381,12 +398,18 @@ def parse_csv(file_path: str, logger) -> List[Dict[str, Any]]:
                 for j, chunk in enumerate(splitted):
                     parsed_data.append({
                         "instruction": instruction + f" (część {j+1}/{len(splitted)})",
-                        "input": chunk,
-                        "output": output,
+                        "prompt": "Jakie informacje zawiera ten fragment wiersza danych?",
+                        "completion": output,
                         "metadata": {
+                            "source_file": os.path.basename(file_path),
                             "row_index": i,
                             "chunk_index": j,
-                            "source_file": os.path.basename(file_path)
+                            "total_chunks": len(splitted),
+                            "model_used": "",  # Will be filled in by process.py
+                            "processing_time": "",  # Will be filled in by process.py
+                            "confidence_score": 0.93,  # Default value
+                            "keywords": [],  # Will be extracted later in process.py
+                            "extracted_entities": []  # Will be extracted later in process.py
                         }
                     })
     except Exception as e:
@@ -407,12 +430,30 @@ def _process_json_item(item: Any, logger=None, path="root") -> List[Dict[str, An
     if isinstance(item, dict):
         # If directly matches instruction/input
         if all(k in item for k in ['instruction','input']):
-            rec = {
-                "instruction": str(item['instruction']),
-                "input": str(item['input']),
-                "output": str(item.get('output',"")),
-                "metadata": item.get('metadata', {})
-            }
+            # Handle legacy format as well as new standardized format
+            if 'prompt' in item and 'completion' in item:
+                # Already in new format
+                rec = {
+                    "instruction": str(item['instruction']),
+                    "prompt": str(item['prompt']),
+                    "completion": str(item['completion']),
+                    "metadata": item.get('metadata', {})
+                }
+            else:
+                # Convert from old format to new format
+                rec = {
+                    "instruction": str(item['instruction']),
+                    "prompt": str(item['input']),
+                    "completion": str(item.get('output',"")),
+                    "metadata": {
+                        **item.get('metadata', {}),
+                        "model_used": "",  # Will be filled in by process.py
+                        "processing_time": "",  # Will be filled in by process.py
+                        "confidence_score": 0.9,  # Default value
+                        "keywords": [],  # Will be extracted later
+                        "extracted_entities": []  # Will be extracted later
+                    }
+                }
             records.append(rec)
             return records
         
@@ -424,13 +465,20 @@ def _process_json_item(item: Any, logger=None, path="root") -> List[Dict[str, An
                 splitted = chunk_text(cleaned, max_size=MAX_CHUNK_SIZE)
                 for i, chunk in enumerate(splitted):
                     records.append({
-                        "instruction": "Przeanalizuj następujący tekst",
-                        "input": chunk,
-                        "output": f"Analiza wskazuje na istotne informacje zawarte w tekście dotyczącym {path}.{tk}. Dokument zawiera kluczowe dane, które należy uwzględnić w kontekście całościowej oceny.",
+                        "instruction": f"Przeanalizuj tekst dotyczący {path}.{tk}",
+                        "prompt": "Jakie informacje zawiera ten fragment tekstu?",
+                        "completion": f"Analiza wskazuje na istotne informacje zawarte w tekście dotyczącym {path}.{tk}. Dokument zawiera kluczowe dane, które należy uwzględnić w kontekście całościowej oceny.",
                         "metadata":{
+                            "source_file": path.split('.')[-1] if '.' in path else "json_extract",
                             "json_path": path,
                             "chunk_index": i,
-                            "source_field": tk
+                            "total_chunks": len(splitted),
+                            "source_field": tk,
+                            "model_used": "",  # Will be filled in by process.py
+                            "processing_time": "",  # Will be filled in by process.py
+                            "confidence_score": 0.89,  # Default value
+                            "keywords": [],  # Will be extracted later
+                            "extracted_entities": []  # Will be extracted later
                         }
                     })
                 large_field_found = True
@@ -453,12 +501,19 @@ def _process_json_item(item: Any, logger=None, path="root") -> List[Dict[str, An
             splitted = chunk_text(cleaned, max_size=MAX_CHUNK_SIZE)
             for i, chunk in enumerate(splitted):
                 records.append({
-                    "instruction": "Przedstaw treść dokumentu",
-                    "input": chunk,
-                    "output": f"Dokument zawiera istotne treści, które należy przeanalizować w kontekście całościowego znaczenia. Fragment {i+1} stanowi część większej całości.",
+                    "instruction": "Przedstaw treść fragmentu dokumentu",
+                    "prompt": "Jakie informacje zawiera ten fragment tekstu?",
+                    "completion": f"Dokument zawiera istotne treści, które należy przeanalizować w kontekście całościowego znaczenia. Fragment {i+1} stanowi część większej całości.",
                     "metadata":{
+                        "source_file": path.split('.')[-1] if '.' in path else "string_extract",
                         "json_path": path,
-                        "chunk_index": i
+                        "chunk_index": i,
+                        "total_chunks": len(splitted),
+                        "model_used": "",  # Will be filled in by process.py
+                        "processing_time": "",  # Will be filled in by process.py
+                        "confidence_score": 0.88,  # Default value
+                        "keywords": [],  # Will be extracted later
+                        "extracted_entities": []  # Will be extracted later
                     }
                 })
     return records
@@ -478,9 +533,18 @@ def parse_json_file(file_path: str, logger) -> List[Dict[str, Any]]:
     if not recs:
         return [{
             "instruction":"Przeanalizuj strukturę dokumentu JSON",
-            "input": data,
-            "output":"Dokument JSON zawiera zorganizowaną strukturę danych, która może być wykorzystana do dalszej analizy. Struktura ta jest typowa dla schematów wymiany danych.",
-            "metadata": {"source_file": os.path.basename(file_path)}
+            "prompt": "Jaką strukturę danych zawiera ten dokument JSON?",
+            "completion":"Dokument JSON zawiera zorganizowaną strukturę danych, która może być wykorzystana do dalszej analizy. Struktura ta jest typowa dla schematów wymiany danych.",
+            "metadata": {
+                "source_file": os.path.basename(file_path),
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "model_used": "",  # Will be filled in by process.py
+                "processing_time": "",  # Will be filled in by process.py
+                "confidence_score": 0.9,  # Default value
+                "keywords": [],  # Will be extracted later
+                "extracted_entities": []  # Will be extracted later
+            }
         }]
     logger.info(f"[parse_json_file] Created {len(recs)} records from JSON file.")
     return recs
@@ -501,10 +565,20 @@ def parse_jsonl_file(file_path: str, logger) -> List[Dict[str, Any]]:
                 sub_records = _process_json_item(obj, logger=logger, path=f"line_{i}")
                 if not sub_records:
                     results.append({
-                        "instruction":"Przeanalizuj obiekt JSON",
-                        "input": line,
-                        "output":"Obiekt JSON reprezentuje element w kolekcji danych. Na podstawie struktury można określić jego zastosowanie i kontekst w całościowym systemie.",
-                        "metadata":{"line_number": i}
+                        "instruction":"Przeanalizuj obiekt JSON z linii dokumentu",
+                        "prompt": "Jakie dane zawiera ten obiekt JSON?",
+                        "completion":"Obiekt JSON reprezentuje element w kolekcji danych. Na podstawie struktury można określić jego zastosowanie i kontekst w całościowym systemie.",
+                        "metadata":{
+                            "source_file": os.path.basename(file_path),
+                            "line_number": i,
+                            "chunk_index": i-1,  # Using line number as chunk index
+                            "total_chunks": len(cleaned_lines),  # Total lines as total chunks
+                            "model_used": "",  # Will be filled in by process.py
+                            "processing_time": "",  # Will be filled in by process.py
+                            "confidence_score": 0.9,  # Default value
+                            "keywords": [],  # Will be extracted later
+                            "extracted_entities": []  # Will be extracted later
+                        }
                     })
                 else:
                     results.extend(sub_records)
@@ -540,9 +614,18 @@ def parse_yaml_file(file_path: str, logger) -> List[Dict[str, Any]]:
     if not recs:
         return [{
             "instruction":"Analizuj strukturę pliku konfiguracyjnego YAML",
-            "input": raw_data,
-            "output":"Plik YAML zawiera uporządkowaną konfigurację, która określa parametry i ustawienia systemu. Na podstawie struktury można określić logikę działania i przeznaczenie aplikacji.",
-            "metadata": {"source_file": os.path.basename(file_path)}
+            "prompt": "Jakie dane konfiguracyjne zawiera ten plik YAML?",
+            "completion":"Plik YAML zawiera uporządkowaną konfigurację, która określa parametry i ustawienia systemu. Na podstawie struktury można określić logikę działania i przeznaczenie aplikacji.",
+            "metadata": {
+                "source_file": os.path.basename(file_path),
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "model_used": "",  # Will be filled in by process.py
+                "processing_time": "",  # Will be filled in by process.py
+                "confidence_score": 0.9,  # Default value
+                "keywords": [],  # Will be extracted later
+                "extracted_entities": []  # Will be extracted later
+            }
         }]
     
     logger.info(f"[parse_yaml_file] Created {len(recs)} records from YAML.")
@@ -614,13 +697,19 @@ def parse_docx(file_path: str, logger) -> List[Dict[str, Any]]:
         for j, ch in enumerate(parted):
             records.append({
                 "instruction": instruction + (f" (część {j+1}/{len(parted)})" if len(parted) > 1 else ""),
-                "input": ch,
-                "output": output,
+                "prompt": f"Jakie informacje zawiera {heading if heading else 'ten fragment'} dokumentu?",
+                "completion": output,
                 "metadata":{
+                    "source_file": os.path.basename(file_path),
                     "docx_heading": heading,
                     "section_index": i,
                     "chunk_index": j,
-                    "source_file": os.path.basename(file_path)
+                    "total_chunks": len(parted),
+                    "model_used": "",  # Will be filled in by process.py
+                    "processing_time": "",  # Will be filled in by process.py
+                    "confidence_score": 0.92,  # Default value
+                    "keywords": [],  # Will be extracted later
+                    "extracted_entities": []  # Will be extracted later
                 }
             })
             chunked_count += 1
@@ -684,12 +773,17 @@ def parse_pdf(file_path: str, logger) -> List[Dict[str, Any]]:
         
         records.append({
             "instruction": f"Przeanalizuj fragment {i+1}/{len(chunks)} dokumentu PDF",
-            "input": ch,
-            "output": output,
+            "prompt": f"Co zawiera ten fragment dokumentu PDF?",
+            "completion": output,
             "metadata":{
+                "source_file": os.path.basename(file_path),
                 "chunk_index": i,
                 "total_chunks": len(chunks),
-                "source_file": os.path.basename(file_path)
+                "model_used": "",  # Will be filled in by process.py
+                "processing_time": "",  # Will be filled in by process.py
+                "confidence_score": 0.9,  # Default value
+                "keywords": [],  # Will be extracted later in process.py
+                "extracted_entities": []  # Will be extracted later in process.py
             }
         })
     logger.info(f"[parse_pdf] Created {len(records)} records from PDF.")

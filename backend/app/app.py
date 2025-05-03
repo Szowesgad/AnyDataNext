@@ -8,11 +8,12 @@ import uuid
 import time
 import asyncio
 import re
+import copy
 from contextlib import asynccontextmanager # Needed for lifespan
 from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, HTTPException, Body
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 import shutil
 from pathlib import Path
 import tempfile
@@ -177,6 +178,116 @@ LOGS_DIR = BACKEND_DIR / "logs"
 # Ensure required directories exist
 for dir_path in [UPLOAD_DIR, OUTPUT_DIR, LOGS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
+    
+# --- Format Transformation Utilities ---
+
+def _transform_record_format(record: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Transform a single record from old format to the standardized format.
+    
+    Transforms:
+    - "input" → "prompt"
+    - "output" → "completion"
+    - Ensures complete metadata
+    
+    Args:
+        record: Record to transform
+    
+    Returns:
+        Record in standardized format
+    """
+    # Make a copy to avoid modifying the original
+    transformed = copy.deepcopy(record)
+    
+    # Skip if already in standard format
+    if "prompt" in transformed and "completion" in transformed and "instruction" in transformed:
+        # Still ensure metadata is complete
+        if "metadata" in transformed:
+            transformed["metadata"] = _ensure_complete_metadata(transformed["metadata"])
+        return transformed
+    
+    # Convert old format to new format
+    if "input" in transformed and "output" in transformed:
+        transformed["prompt"] = transformed.pop("input")
+        transformed["completion"] = transformed.pop("output")
+    
+    # Ensure required fields exist
+    if "prompt" not in transformed:
+        transformed["prompt"] = "What information is contained in this document?"
+        logger.warning(f"Added missing 'prompt' field during format transformation")
+    
+    if "completion" not in transformed:
+        transformed["completion"] = "This document contains important information."
+        logger.warning(f"Added missing 'completion' field during format transformation")
+    
+    if "instruction" not in transformed:
+        transformed["instruction"] = "Analyze the following document content"
+        logger.warning(f"Added missing 'instruction' field during format transformation")
+    
+    # Handle metadata
+    if "metadata" not in transformed:
+        transformed["metadata"] = {}
+    
+    transformed["metadata"] = _ensure_complete_metadata(transformed["metadata"])
+    
+    return transformed
+
+def _ensure_complete_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ensure that metadata contains all required fields.
+    
+    Args:
+        metadata: Original metadata dictionary
+    
+    Returns:
+        Complete metadata with default values for missing fields
+    """
+    # Make a copy to avoid modifying the original
+    meta = copy.deepcopy(metadata)
+    
+    # Define default values for required metadata fields
+    defaults = {
+        "source_file": meta.get("source_file", "unknown"),
+        "chunk_index": meta.get("chunk_index", 0),
+        "total_chunks": meta.get("total_chunks", 1),
+        "model_used": meta.get("model_used", ""),
+        "processing_time": meta.get("processing_time", ""),
+        "confidence_score": meta.get("confidence_score", 0.9),
+        "keywords": meta.get("keywords", []),
+        "extracted_entities": meta.get("extracted_entities", [])
+    }
+    
+    # Update metadata with default values for missing fields
+    for key, value in defaults.items():
+        if key not in meta or meta[key] is None:
+            meta[key] = value
+    
+    return meta
+
+def _transform_dataset_format(data: Union[List[Dict[str, Any]], Dict[str, Any]]) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Transform a dataset (list of records or single record) to standardized format.
+    
+    Args:
+        data: Dataset to transform
+    
+    Returns:
+        Dataset in standardized format
+    """
+    if isinstance(data, list):
+        return [_transform_record_format(item) for item in data]
+    elif isinstance(data, dict):
+        if "records" in data and isinstance(data["records"], list):
+            # Handle nested structure with records array
+            data["records"] = [_transform_record_format(item) for item in data["records"]]
+            return data
+        else:
+            # Single record
+            return _transform_record_format(data)
+    else:
+        # Unknown format, return as is
+        logger.warning(f"Unknown data format for transformation: {type(data)}")
+        return data
 
 @app.get("/")
 async def root():
@@ -272,6 +383,22 @@ class ProcessRequest(pydantic.BaseModel):
     output_format: str = "json" # Example: json, jsonl, etc.
     add_reasoning: bool = False
     processing_type: str = "standard" # 'standard', 'article', 'translate'
+
+class BatchProcessRequest(pydantic.BaseModel):
+    file_ids: List[str]  # Multiple file IDs to process
+    model_provider: str
+    model: str
+    temperature: float = 0.7
+    max_tokens: Optional[int] = None
+    system_prompt: Optional[str] = None
+    language: str = "pl"  # Default language
+    keywords: List[str] = []
+    output_format: str = "json"  # Example: json, jsonl, etc.
+    add_reasoning: bool = False
+    processing_type: str = "standard"  # 'standard', 'article', 'translate'
+    concurrent_limit: int = 3  # Maximum number of concurrent processing tasks
+    batch_size: int = 5  # Number of files to process per batch for rate limiting
+    batch_delay: float = 0.5  # Delay between batches in seconds
 
 class SuggestParamsRequest(pydantic.BaseModel):
     file_id: str
@@ -380,6 +507,100 @@ async def process_single_file_api(
     except Exception as e:
         logger.error(f"Error queuing single file processing: {e}", exc_info=True)
         # Let the global handler manage this
+        raise e
+
+@app.post("/api/process-batch")
+async def process_batch_files_api(
+    batch_request: BatchProcessRequest,
+    background_tasks: BackgroundTasks,
+    request: Request
+):
+    """
+    Process multiple uploaded files in batch mode with specified parameters.
+    
+    Args:
+        batch_request: Pydantic model containing batch processing parameters.
+        background_tasks: FastAPI background tasks manager.
+        
+    Returns:
+        JSON response with the batch_job_id for status tracking.
+    """
+    try:
+        logger.info(f"Received batch process request for {len(batch_request.file_ids)} files: {batch_request.dict()}")
+        available_models = request.app.state.available_models
+        
+        # Validate model selection
+        if batch_request.model_provider not in available_models:
+            logger.error(f"Invalid model provider selected: {batch_request.model_provider}")
+            logger.info(f"Available providers: {list(available_models.keys())}")
+            raise HTTPException(status_code=400, detail=f"Invalid model provider: {batch_request.model_provider}")
+        
+        # Create batch job ID
+        batch_job_id = str(uuid.uuid4())
+        
+        # Create output directory for this batch job
+        job_output_dir = OUTPUT_DIR / batch_job_id
+        job_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Convert file_ids to full paths
+        file_paths = []
+        for file_id in batch_request.file_ids:
+            file_path = UPLOAD_DIR / file_id
+            if not file_path.is_file():
+                logger.warning(f"File not found in batch: {file_id}. Will be skipped.")
+                continue
+            file_paths.append(str(file_path))
+        
+        if not file_paths:
+            raise HTTPException(status_code=400, detail="No valid files found in batch request")
+            
+        # Store batch job info
+        job_info = {
+            "job_id": batch_job_id,
+            "name": f"Batch Process {batch_job_id[:8]}",
+            "file_ids": batch_request.file_ids,
+            "file_count": len(file_paths),
+            "started_at": time.time(),
+            "model_provider": batch_request.model_provider,
+            "model": batch_request.model,
+            "temperature": batch_request.temperature,
+            "max_tokens": batch_request.max_tokens,
+            "system_prompt": batch_request.system_prompt,
+            "language": batch_request.language,
+            "keywords": batch_request.keywords,
+            "output_format": batch_request.output_format,
+            "add_reasoning": batch_request.add_reasoning,
+            "processing_type": batch_request.processing_type,
+            "completed": False,
+            "status": "queued",
+            "progress": 0,
+            "output_file": None,
+            "error": None,
+            "concurrent_limit": batch_request.concurrent_limit,
+            "batch_size": batch_request.batch_size,
+            "batch_delay": batch_request.batch_delay
+        }
+        request.app.state.active_jobs[batch_job_id] = job_info
+        
+        # Run batch processing in background
+        background_tasks.add_task(
+            process_batch_files_background,
+            job_id=batch_job_id,
+            file_paths=file_paths,
+            params=batch_request,
+            app_state=request.app.state
+        )
+        
+        logger.info(f"Queued batch processing job {batch_job_id} for {len(file_paths)} files")
+        return JSONResponse(content={
+            "job_id": batch_job_id,
+            "message": f"Batch processing queued for {len(file_paths)} files",
+            "file_count": len(file_paths)
+        })
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        logger.error(f"Error queuing batch processing: {e}", exc_info=True)
         raise e
 
 @app.post("/api/process-audio-dataset")
@@ -588,6 +809,132 @@ async def process_single_file_background(
             "error": error_message
         })
 
+async def process_batch_files_background(
+    job_id: str,
+    file_paths: List[str],
+    params: BatchProcessRequest,
+    app_state: Any # Receive app state
+):
+    """
+    Background task to process multiple files in batch.
+    
+    Args:
+        job_id: Unique job identifier.
+        file_paths: List of paths to the files to process.
+        params: Validated batch processing parameters.
+        app_state: Application state with active_jobs.
+    """
+    job_output_dir = OUTPUT_DIR / job_id
+    output_path = job_output_dir / f"output.{params.output_format}"
+    start_job_time = time.time()
+    
+    try:
+        logger.info(f"Starting background batch job {job_id} for {len(file_paths)} files")
+        active_jobs = app_state.active_jobs
+        if job_id in active_jobs:
+            active_jobs[job_id]["status"] = "processing"
+            
+        # Send initial processing status
+        await manager.broadcast({
+            "job_id": job_id,
+            "type": "job_update", 
+            "status": "Initializing batch processing...", 
+            "progress": 5,
+            "files_total": len(file_paths),
+            "files_processed": 0
+        })
+        
+        # Call the batch processing function from process.py
+        all_records = await process_files(
+            file_paths=file_paths,
+            model_provider=params.model_provider,
+            model=params.model,
+            temperature=params.temperature,
+            max_tokens=params.max_tokens,
+            system_prompt=params.system_prompt,
+            language=params.language,
+            keywords=params.keywords,
+            add_reasoning=params.add_reasoning,
+            processing_type=params.processing_type,
+            concurrent_limit=params.concurrent_limit,
+            batch_size=params.batch_size,
+            batch_delay=params.batch_delay
+        )
+        
+        # Check if processing resulted in an error
+        if len(all_records) == 1 and "error" in all_records[0].get("metadata", {}):
+            error_info = all_records[0]["metadata"]["error"]
+            logger.error(f"Batch processing function failed for job {job_id}: {error_info}")
+            raise ValueError(f"Batch processing failed: {error_info}")
+            
+        # Send saving status
+        await manager.broadcast({
+            "job_id": job_id, 
+            "type": "job_update", 
+            "status": "Saving batch results...", 
+            "progress": 95,
+            "files_total": len(file_paths),
+            "files_processed": len(file_paths)
+        })
+        
+        # Save results
+        save_results(all_records, str(output_path), format=params.output_format)
+        record_count = len(all_records)
+        
+        # Job Completion
+        job_duration = time.time() - start_job_time
+        if job_id in active_jobs:
+            active_jobs[job_id].update({
+                "completed": True,
+                "status": "completed",
+                "completed_at": time.time(),
+                "duration_seconds": round(job_duration, 2),
+                "record_count": record_count,
+                "output_file": str(output_path),
+                "progress": 100,
+                "files_processed": len(file_paths)
+            })
+            
+        # Final progress broadcast
+        await manager.broadcast({
+            "job_id": job_id,
+            "type": "job_update",
+            "status": "completed",
+            "progress": 100,
+            "record_count": record_count,
+            "output_file": str(output_path),
+            "files_total": len(file_paths),
+            "files_processed": len(file_paths)
+        })
+        
+        logger.info(f"Batch job {job_id} completed in {job_duration:.2f}s with {record_count} records from {len(file_paths)} files")
+        
+    except Exception as e:
+        # Job Error Handling
+        job_duration = time.time() - start_job_time
+        error_message = f"{type(e).__name__}: {e}"
+        full_error = f"Error in batch job {job_id} after {job_duration:.2f}s: {error_message}"
+        logger.error(full_error, exc_info=True)
+        
+        if job_id in active_jobs:
+            active_jobs[job_id].update({
+                "status": "error",
+                "error": error_message,
+                "completed": False,
+                "completed_at": time.time(),
+                "duration_seconds": round(job_duration, 2),
+                "progress": 100
+            })
+            
+        # Error broadcast
+        await manager.broadcast({
+            "job_id": job_id,
+            "type": "job_update",
+            "status": "error",
+            "progress": 100,
+            "error": error_message
+        })
+
 async def process_audio_dataset_background(
     job_id: str,
     file_path: Path,
@@ -774,17 +1121,32 @@ async def get_dataset_api(dataset_id: str):
         dataset_id: Dataset identifier.
         
     Returns:
-        JSON file with the complete dataset.
+        JSON file with the complete dataset in standardized format.
     """
     dataset_path = OUTPUT_DIR / dataset_id / "output.json"
     if not dataset_path.exists():
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
     
-    return FileResponse(
-        path=dataset_path,
-        media_type="application/json",
-        filename=f"dataset_{dataset_id}.json"
-    )
+    try:
+        # Read JSON, transform to standard format, and return as JSONResponse
+        with open(dataset_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Transform to standardized format
+        transformed_data = _transform_dataset_format(data)
+        
+        return JSONResponse(
+            content=transformed_data,
+            media_type="application/json",
+        )
+    except Exception as e:
+        logger.error(f"Error transforming dataset {dataset_id}: {e}", exc_info=True)
+        # Fallback to direct file response if transformation fails
+        return FileResponse(
+            path=dataset_path,
+            media_type="application/json",
+            filename=f"dataset_{dataset_id}.json"
+        )
 
 @app.get("/api/datasets/{dataset_id}/preview")
 async def preview_dataset_api(dataset_id: str, limit: int = 5):
@@ -796,7 +1158,7 @@ async def preview_dataset_api(dataset_id: str, limit: int = 5):
         limit: Maximum number of records to return (default: 5)
         
     Returns:
-        JSON response with a preview of the dataset.
+        JSON response with a preview of the dataset in standardized format.
     """
     dataset_path = OUTPUT_DIR / dataset_id / "output.json"
     if not dataset_path.exists():
@@ -805,13 +1167,19 @@ async def preview_dataset_api(dataset_id: str, limit: int = 5):
     try:
         with open(dataset_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            preview_data = data[:limit]
-            return JSONResponse(content={
-                "dataset_id": dataset_id,
-                "total_records": len(data),
-                "preview_count": len(preview_data),
-                "records": preview_data
-            })
+            
+        # Get limited data first
+        preview_data = data[:limit]
+        
+        # Transform to standardized format
+        transformed_preview = _transform_dataset_format(preview_data)
+        
+        return JSONResponse(content={
+            "dataset_id": dataset_id,
+            "total_records": len(data),
+            "preview_count": len(transformed_preview),
+            "records": transformed_preview
+        })
     except Exception as e:
         logger.error(f"Error previewing dataset {dataset_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error previewing dataset: {str(e)}")
