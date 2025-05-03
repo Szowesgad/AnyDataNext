@@ -107,8 +107,9 @@ export default function Home() {
   const setupWebSocket = (jobId: string) => {
     const clientId = `frontend_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     // Use the response job_id for WebSocket, not the fileId
-    const wsUrl = `${websocketUrl}/ws/${clientId}?job_id=${jobId}`;
+    const wsUrl = `${websocketUrl}/ws/${clientId}`;
     console.log(`Connecting to WebSocket: ${wsUrl}`);
+    console.log(`Monitoring job: ${jobId}`);
     
     // Close existing connection if any
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
@@ -127,11 +128,58 @@ export default function Home() {
   // Time between reconnection attempts in ms
   const RECONNECT_INTERVAL = 2000;
   
+  // Function to check job status via REST API (backup to WebSocket)
+  const checkJobStatus = async (jobId: string) => {
+    if (!jobId) return;
+    
+    try {
+      console.log(`Checking job status via REST API for job: ${jobId}`);
+      const response = await axios.get(`${backendUrl}/api/status/${jobId}`);
+      
+      if (response.status === 200) {
+        const jobData = response.data;
+        console.log("Job status response:", jobData);
+        
+        // Update UI based on job status
+        setStatusText(jobData.status || 'Unknown status');
+        setProcessingProgress(jobData.progress || 0);
+        
+        // Check for completion
+        if (jobData.completed) {
+          console.log('Job completed based on REST API check');
+          setStatusText('Processing Complete!');
+          setProcessingProgress(100);
+          setFinalResultUrl(`${backendUrl}/api/results/${jobId}`);
+          setIsProcessing(false);
+          setShowConfigurator(false);
+          return true; // Job completed
+        }
+        // Check for error
+        else if (jobData.status === 'error' || jobData.error) {
+          setError(`Processing Error: ${jobData.error || 'Unknown error'}`);
+          setStatusText('Processing Failed');
+          setIsProcessing(false);
+          return true; // Job completed (with error)
+        }
+      }
+    } catch (error) {
+      console.error('Error checking job status:', error);
+    }
+    
+    return false; // Job not completed
+  };
+
   useEffect(() => {
     let reconnectAttempts = 0;
     let reconnectTimeout: NodeJS.Timeout | null = null;
+    let statusCheckInterval: NodeJS.Timeout | null = null;
     
     if (isProcessing && currentJobId) {
+      // Set up regular status checks as backup to WebSocket
+      statusCheckInterval = setInterval(() => {
+        checkJobStatus(currentJobId);
+      }, 5000); // Check every 5 seconds
+      
       const socket = setupWebSocket(currentJobId);
 
       socket.onopen = () => {
@@ -146,7 +194,14 @@ export default function Home() {
           const message = JSON.parse(event.data);
           console.log('WebSocket Message:', message);
 
-          if (message.job_id !== currentJobId) {
+          // Debug information
+          console.log('Current job ID:', currentJobId);
+          console.log('Message job ID:', message.job_id);
+          console.log('Message type:', message.type);
+          console.log('Message status:', message.status);
+          
+          // Check job_id only if it exists in the message
+          if (message.job_id && message.job_id !== currentJobId) {
             console.log(`Ignoring message for different job_id: ${message.job_id}`);
             return;
           }
@@ -154,24 +209,34 @@ export default function Home() {
           if (message.type === 'job_update') {
             setStatusText(message.status || 'Processing...');
             setProcessingProgress(message.progress || 0);
-            if (message.status === 'Error') {
-              setError(`Processing Error: ${message.details?.error || 'Unknown error'}`);
+            
+            // Check for completion based on status
+            if (message.status === 'completed') {
+              console.log('Job completed based on status update');
+              setStatusText('Processing Complete!');
+              setProcessingProgress(100);
+              setFinalResultUrl(`${backendUrl}/api/results/${currentJobId}`);
               setIsProcessing(false);
-              setCurrentJobId(null);
+              setShowConfigurator(false);
+            }
+            // Check for error
+            else if (message.status === 'error' || message.status === 'Error') {
+              setError(`Processing Error: ${message.details?.error || message.error || 'Unknown error'}`);
+              setStatusText('Processing Failed');
+              setIsProcessing(false);
             }
           } else if (message.type === 'job_complete') {
+            console.log('Job completed based on job_complete message');
             setStatusText('Processing Complete!');
             setProcessingProgress(100);
-            setFinalResultUrl(`${backendUrl}/api/results/${message.job_id}`);
+            setFinalResultUrl(`${backendUrl}/api/results/${message.job_id || currentJobId}`);
             setIsProcessing(false);
             setShowConfigurator(false);
-            setUploadedFileInfo(null);
           } else if (message.type === 'job_error') {
             setError(`Processing Failed: ${message.error || 'Unknown error'}`);
             setStatusText('Processing Failed');
             setProcessingProgress(0);
             setIsProcessing(false);
-            setCurrentJobId(null);
           }
         } catch (e) {
           console.error('Failed to parse WebSocket message:', event.data, e);
@@ -225,6 +290,11 @@ export default function Home() {
         // Clear any pending reconnection timeout
         if (reconnectTimeout) {
           clearTimeout(reconnectTimeout);
+        }
+        
+        // Clear status check interval
+        if (statusCheckInterval) {
+          clearInterval(statusCheckInterval);
         }
         
         // Close WebSocket if open
@@ -488,16 +558,27 @@ export default function Home() {
           <div className="mt-8 p-6 bg-green-50 dark:bg-green-900 border border-green-400 dark:border-green-700 rounded-lg text-center">
             <h2 className="text-2xl font-semibold mb-4 text-green-800 dark:text-green-200">Processing Complete!</h2>
             {currentJobId && <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Job ID: {currentJobId}</p>}
+            <div className="mb-4">
+              <p className="text-sm text-gray-700 dark:text-gray-300">Results URL: <code className="bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded text-xs">{finalResultUrl}</code></p>
+            </div>
             <a
               href={finalResultUrl}
               download
               className="inline-block px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg shadow transition duration-200"
+              target="_blank"
+              rel="noopener noreferrer"
             >
-              Download Dataset ZIP
+              Download Results
             </a>
             <button
+              onClick={() => window.open(finalResultUrl, '_blank')}
+              className="ml-2 inline-block px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow transition duration-200"
+            >
+              View in Browser
+            </button>
+            <button
               onClick={handleResetAndUploadAnother}
-              className="ml-4 text-sm text-gray-500 hover:text-gray-700 underline"
+              className="ml-4 text-sm text-gray-500 hover:text-gray-700 underline mt-4 block mx-auto"
             >
               Process Another File
             </button>

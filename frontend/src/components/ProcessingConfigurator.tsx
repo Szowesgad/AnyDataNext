@@ -42,6 +42,12 @@ interface ProcessingConfig {
   model: string;
   systemPrompt?: string;
   keywords?: string[];
+  temperature?: number;
+  maxTokens?: number;
+  language?: string;
+  processingType?: string;
+  addReasoning?: boolean;
+  outputFormat?: string;
 }
 
 // --- Component Props --- 
@@ -77,7 +83,10 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
   const [systemPrompt, setSystemPrompt] = useState<string>('');
   const [keywords, setKeywords] = useState<string>(initialKeywords.join(', '));
   const [language, setLanguage] = useState<string>(initialLanguage); // Keep language state if needed
-
+  const [processingType, setProcessingType] = useState<string>('standard');
+  const [addReasoning, setAddReasoning] = useState<boolean>(false);
+  const [outputFormat, setOutputFormat] = useState<string>('json');
+  
   // Removed the useState for isProcessing as it seems handled by parent or unused
   const [errorMessage, setErrorMessage] = useState<string | null>(null); // Keep error message state
 
@@ -128,7 +137,11 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
       systemPrompt: systemPrompt || undefined, // Send undefined if empty
       keywords: keywordsList.length > 0 ? keywordsList : undefined, // Send undefined if empty
       temperature: temperature,
-      maxTokens: maxTokens
+      maxTokens: maxTokens,
+      language: language,
+      processingType: processingType,
+      addReasoning: addReasoning,
+      outputFormat: outputFormat
     };
 
     console.log("Submitting processing configuration:", config);
@@ -273,6 +286,69 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           placeholder="e.g., ai, dataset, veterinary"
           className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
         />
+      </div>
+
+      {/* Processing Type & Options */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div>
+          <label htmlFor="processingType" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Processing Type</label>
+          <select
+            id="processingType"
+            value={processingType}
+            onChange={(e) => setProcessingType(e.target.value)}
+            className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
+          >
+            <option value="standard">Standard Processing</option>
+            <option value="article">Article Processing</option>
+            <option value="translate">Translation Processing</option>
+          </select>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Type of processing to perform</p>
+        </div>
+        <div>
+          <label htmlFor="outputFormat" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Output Format</label>
+          <select
+            id="outputFormat"
+            value={outputFormat}
+            onChange={(e) => setOutputFormat(e.target.value)}
+            className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
+          >
+            <option value="json">JSON</option>
+            <option value="jsonl">JSONL (JSON Lines)</option>
+          </select>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Format of the output file</p>
+        </div>
+      </div>
+
+      {/* Language Selection */}
+      <div className="mb-6">
+        <label htmlFor="language" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Language</label>
+        <select
+          id="language"
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+          className="w-full border dark:border-gray-600 rounded-md shadow-sm p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-indigo-500 focus:border-indigo-500"
+        >
+          <option value="pl">Polish</option>
+          <option value="en">English</option>
+        </select>
+        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Primary language for prompts and responses</p>
+      </div>
+
+      {/* Advanced Options */}
+      <div className="mb-6">
+        <div className="flex items-center mb-2">
+          <input
+            id="addReasoning"
+            type="checkbox"
+            checked={addReasoning}
+            onChange={(e) => setAddReasoning(e.target.checked)}
+            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+          />
+          <label htmlFor="addReasoning" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+            Include Reasoning (adds explanation why answer is correct)
+          </label>
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400">This will add an additional 'reasoning' field to each generated record</p>
       </div>
 
       {/* Generation Parameters */}

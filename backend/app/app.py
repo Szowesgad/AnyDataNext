@@ -32,11 +32,11 @@ APP_PARENT_DIR = Path(__file__).resolve().parent.parent
 UTILS_DIR = APP_PARENT_DIR / 'utils'
 sys.path.insert(0, str(APP_PARENT_DIR)) # Add backend/ to sys.path
 
-from utils.process import process_file, process_files, save_results
-from utils.logging import setup_logging
-from utils.models import get_available_models, get_default_provider, get_default_model
-from utils.client import get_llm_client # Import LLM client getter
-from utils.multimedia_processor import create_audio_text_dataset
+from app.utils.process import process_file, process_files, save_results
+from app.utils.logging import setup_logging
+from app.utils.models import get_available_models, get_default_provider, get_default_model
+from app.utils.client import get_llm_client # Import LLM client getter
+from app.utils.multimedia_processor import create_audio_text_dataset
 
 logger = setup_logging()
 
