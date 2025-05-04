@@ -7,6 +7,7 @@ import os
 import random
 import argparse
 import re
+import time
 from tqdm import tqdm
 import concurrent.futures
 import sys
@@ -15,7 +16,7 @@ import logging
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import get_llm_client, auto_generate_keywords, search_web, anonymize_text
+from utils import get_llm_client, auto_generate_keywords, search_web, anonymize_text, batch_anonymize_text
 
 
 def extract_article_metadata(text):
@@ -38,40 +39,26 @@ def extract_article_metadata(text):
     # Try to find title (usually at the beginning)
     title_match = re.search(r"^(.+?)(?=\n\n|\nStreszczenie|\nAbstract)", text, re.DOTALL)
     if title_match:
-        lines = title_match.group(1).strip().split('
-')
+        lines = title_match.group(1).strip().split('\n')
         # Filter out lines that are likely author names, journal headers, etc.
         filtered_lines = [line for line in lines if not re.match(r'(dr|lek\.|mgr|prof\.|\*|[A-Z]{2,})', line)]
         if filtered_lines:
             metadata["title"] = filtered_lines[-1].strip()
     
     # Find authors
-    author_match = re.search(r'(?:dr|lek\.|mgr|prof\.) .+?(?=
-
-|
-Streszczenie)', text, re.DOTALL)
+    author_match = re.search(r'(?:dr|lek\.|mgr|prof\.) .+?(?=\n\n|\nStreszczenie)', text, re.DOTALL)
     if author_match:
         author_text = author_match.group(0)
-        authors = [author.strip() for author in re.split(r',|
-', author_text) if author.strip()]
+        authors = [author.strip() for author in re.split(r',|\n', author_text) if author.strip()]
         metadata["authors"] = authors
     
     # Find abstract
-    abstract_match = re.search(r'(?:Streszczenie|Abstract)
-(.+?)(?=
-
-|
-Słowa kluczowe|
-Key words)', text, re.DOTALL)
+    abstract_match = re.search(r'(?:Streszczenie|Abstract)\n(.+?)(?=\n\n|\nSłowa kluczowe|\nKey words)', text, re.DOTALL)
     if abstract_match:
         metadata["abstract"] = abstract_match.group(1).strip()
     
     # Find keywords
-    keywords_match = re.search(r'(?:Słowa kluczowe|Key words)
-(.+?)(?=
-
-|
-Abstract)', text, re.DOTALL)
+    keywords_match = re.search(r'(?:Słowa kluczowe|Key words)\n(.+?)(?=\n\n|\nAbstract)', text, re.DOTALL)
     if keywords_match:
         keywords_text = keywords_match.group(1)
         keywords = [kw.strip() for kw in re.split(r',|;', keywords_text) if kw.strip()]
@@ -91,34 +78,24 @@ def extract_article_content(text):
         str: Extracted main content
     """
     # Remove page numbers and headers
-    content = re.sub(r'
-\s*\d+\s*
-', ' ', text)
+    content = re.sub(r'\n\s*\d+\s*\n', ' ', text)
     content = re.sub(r'www\..+\.pl', '', content)
     
     # Remove metadata from beginning
-    content_match = re.search(r'(?:Słowa kluczowe|Key words).+?
-
-(.+)', content, re.DOTALL)
+    content_match = re.search(r'(?:Słowa kluczowe|Key words).+?\n\n(.+)', content, re.DOTALL)
     if content_match:
         content = content_match.group(1)
     else:
         # If no keywords found, try from title
-        content_match = re.search(r'(?:^.+?
-
-)(.+)', content, re.DOTALL)
+        content_match = re.search(r'(?:^.+?\n\n)(.+)', content, re.DOTALL)
         if content_match:
             content = content_match.group(1)
     
     # Remove bibliography and acknowledgments
-    content = re.sub(r'Piśmiennictwo
-.+', '', content, flags=re.DOTALL)
+    content = re.sub(r'Piśmiennictwo\n.+', '', content, flags=re.DOTALL)
     
     # Clean text
-    content = re.sub(r'
-{3,}', '
-
-', content)  # Remove multiple newlines
+    content = re.sub(r'\n{3,}', '\n\n', content)  # Remove multiple newlines
     content = re.sub(r'\s{2,}', ' ', content)     # Remove multiple spaces
     
     return content.strip()
@@ -178,13 +155,9 @@ def generate_qa_pairs(
         try:
             search_results = search_web(f"{metadata['title']} medical research", max_results=3)
             if search_results:
-                web_info = "
-
-Additional information from web search:
-"
+                web_info = "\n\nAdditional information from web search:\n"
                 for i, result in enumerate(search_results):
-                    web_info += f"{i+1}. {result['title']}: {result['description']}
-"
+                    web_info += f"{i+1}. {result['title']}: {result['description']}\n"
         except Exception as e:
             logging.warning(f"Error during web search for {metadata['title']}: {e}")
             web_info = "" # Clear web_info if search fails
@@ -195,8 +168,7 @@ Additional information from web search:
 
     domain_guidance = ""
     if keywords and keywords != ["AUTO"]:
-        domain_guidance = f"
-Focus on these key concepts: {', '.join(keywords)}"
+        domain_guidance = f"\nFocus on these key concepts: {', '.join(keywords)}"
 
     # Limit text length to 10k chars (adjust as needed based on model context window)
     # Ensure content is not None before slicing
@@ -225,27 +197,46 @@ Article content:
 
     # Generate questions and answers
     response = ""
-    try:
-        messages = [{"role": "user", "content": qa_prompt}]
-        response = llm_client.generate(messages, temperature=0.5)
-    except Exception as e:
-        logging.error(f"Error generating Q&A with LLM for {os.path.basename(article_path)}: {e}")
-        return [] # Return empty list if LLM generation fails
-
+    max_retries = 3
+    retry_delay = 5  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            messages = [{"role": "user", "content": qa_prompt}]
+            response = llm_client.generate(messages, temperature=0.5)
+            
+            if response:  # If we got a valid response, break out of retry loop
+                break
+                
+            logging.warning(f"LLM returned empty response on attempt {attempt+1} for {os.path.basename(article_path)}")
+            
+            if attempt < max_retries - 1:  # Don't sleep on the last attempt
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+                
+        except Exception as e:
+            err_msg = str(e).lower()
+            is_timeout = any(term in err_msg for term in ["timeout", "timed out", "time out", "connection", "network"])
+            
+            logging.error(f"Error generating Q&A with LLM on attempt {attempt+1} for {os.path.basename(article_path)}: {e}")
+            
+            if is_timeout and attempt < max_retries - 1:
+                logging.info(f"Timeout detected, retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                break  # Non-timeout error or last attempt, exit retry loop
+    
+    # If we still don't have a response after all retries
     if not response:
-        logging.warning(f"LLM returned empty response for {os.path.basename(article_path)}")
-        return []
+        logging.error(f"Failed to get LLM response after {max_retries} attempts for {os.path.basename(article_path)}")
+        return []  # Return empty list if LLM generation fails
 
     # Parse Q&A pairs
     qa_pairs = []
     # Add error handling for parsing LLM response
     try:
-        pattern = r'(?:\d+\.\s+)?Question:\s+(.*?)
-Answer:\s+(.*?)(?=
-
-\d+\.\s+Question:|
-
-\d+\.|\Z)'
+        pattern = r'(?:\d+\.\s+)?Question:\s+(.*?)\nAnswer:\s+(.*?)(?=\n\n\d+\.\s+Question:|\n\n\d+\.|\Z)'
         matches = re.finditer(pattern, response, re.DOTALL)
 
         for match in matches:
@@ -254,8 +245,7 @@ Answer:\s+(.*?)(?=
 
             # Create example in ML format
             example = {
-                "prompt": f"Task: {question}
-Response:",
+                "prompt": f"Task: {question}\nResponse:",
                 "completion": answer
             }
 
@@ -265,8 +255,7 @@ Response:",
         # Ensure response is not empty before summarizing
         if response.strip():
              summary_example = {
-                "prompt": f"Task: What is the article '{title}' about? Present the main thesis and conclusions.
-Response:",
+                "prompt": f"Task: What is the article '{title}' about? Present the main thesis and conclusions.\nResponse:",
                 "completion": generate_article_summary(response, title)
             }
              qa_pairs.append(summary_example)
@@ -295,11 +284,7 @@ def generate_article_summary(qa_text, article_title):
         str: Generated summary
     """
     # Extract all answers
-    answers = re.findall(r'Answer:\s+(.*?)(?=
-
-\d+\.\s+Question:|
-
-\d+\.|\Z)', qa_text, re.DOTALL)
+    answers = re.findall(r'Answer:\s+(.*?)(?=\n\n\d+\.\s+Question:|\n\n\d+\.|\Z)', qa_text, re.DOTALL)
     
     # Combine into one text
     combined_text = ' '.join([answer.strip() for answer in answers])
@@ -330,19 +315,46 @@ def add_reasoning(item, llm_client, keywords=None):
     system_prompt = "Generate step-by-step reasoning for answering this question. Format: <thinking>reasoning</thinking> answer."
     
     if keywords and keywords != ["AUTO"]:
-        system_prompt += f"
-
-Relevant domain concepts: {', '.join(keywords)}"
+        system_prompt += "\n\nRelevant domain concepts: " + ", ".join(keywords)
     
-    user_prompt = f"Instruction: {item['prompt']}
-Answer: {item['completion']}"
+    user_prompt = "Instruction: " + item["prompt"] + "\nAnswer: " + item["completion"]
     
-    messages = [{"role": "user", "content": user_prompt}]
-    response = llm_client.generate(messages, system=system_prompt, temperature=0.5)
+    max_retries = 3
+    retry_delay = 5  # seconds
+    response = ""
+    
+    for attempt in range(max_retries):
+        try:
+            messages = [{"role": "user", "content": user_prompt}]
+            response = llm_client.generate(messages, system=system_prompt, temperature=0.5)
+            
+            if response:  # If we got a valid response, break out of retry loop
+                break
+                
+            logging.warning(f"LLM returned empty response on reasoning attempt {attempt+1}")
+            
+            if attempt < max_retries - 1:  # Don't sleep on the last attempt
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+                
+        except Exception as e:
+            err_msg = str(e).lower()
+            is_timeout = any(term in err_msg for term in ["timeout", "timed out", "time out", "connection", "network"])
+            
+            logging.error(f"Error generating reasoning on attempt {attempt+1}: {e}")
+            
+            if is_timeout and attempt < max_retries - 1:
+                logging.info(f"Timeout detected, retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                break  # Non-timeout error or last attempt, exit retry loop
     
     if response:
         return {"prompt": item["prompt"], "completion": response}
-    return item
+    
+    logging.error(f"Failed to get reasoning response after {max_retries} attempts")
+    return item  # Return original item if all retries failed
 
 
 async def convert(**kwargs):
@@ -477,8 +489,7 @@ def process_articles(
     if keywords == ["AUTO"] and len(article_files) > 0:
         # Sample a few article titles for keyword extraction
         sample_titles = [os.path.basename(file).replace('.txt', '') for file in article_files[:min(5, len(article_files))]]
-        sample_text = "
-".join(sample_titles)
+        sample_text = "\n".join(sample_titles)
         keywords = auto_generate_keywords(sample_text, qa_client)
         print(f"Auto-generated keywords: {', '.join(keywords)}")
     
@@ -673,13 +684,11 @@ def process_articles(
     
     with open(train_path, 'w', encoding='utf-8') as f:
         for item in train_data:
-            f.write(json.dumps(item, ensure_ascii=False) + '
-')
+            f.write(json.dumps(item, ensure_ascii=False) + '\n')
     
     with open(valid_path, 'w', encoding='utf-8') as f:
         for item in valid_data:
-            f.write(json.dumps(item, ensure_ascii=False) + '
-')
+            f.write(json.dumps(item, ensure_ascii=False) + '\n')
     
     print(f"Saved {len(train_data)} examples to train.jsonl and {len(valid_data)} to valid.jsonl")
     
