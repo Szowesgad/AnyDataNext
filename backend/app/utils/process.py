@@ -196,7 +196,24 @@ async def process_file(
             "2. Methodology and approach\n"
             "3. Key findings and conclusions\n"
             "4. Implications for the field\n"
-            "5. Extracting relevant technical terminology and concepts\n"
+            "5. Extracting relevant technical terminology and concepts\n\n"
+            "IMPORTANT: Your response MUST be formatted as a JSON array where each element has EXACTLY the following structure:\n"
+            "{\n"
+            "  \"instruction\": \"SUMMARIZED specific fragment/context from the document, containing exact terminology on which the 'prompt' field was built\",\n"
+            "  \"prompt\": \"Question about concepts, definitions or methods from the document\",\n"
+            "  \"completion\": \"Comprehensive answer considering the full context\",\n"
+            "  \"metadata\": {\n"
+            "    \"source_file\": \"source_file.pdf\",\n"
+            "    \"chunk_index\": 3,\n"
+            "    \"total_chunks\": 12,\n"
+            "    \"model_used\": \"\",\n"
+            "    \"processing_time\": \"\",\n"
+            "    \"confidence_score\": 0.94,\n"
+            "    \"keywords\": [\"keyword1\", \"keyword2\"],\n"
+            "    \"extracted_entities\": [\"entity1\", \"entity2\"]\n"
+            "  }\n"
+            "}\n\n"
+            "Divide the document into 6-12 logical fragments. Each fragment should focus on a different aspect of the article. Return only the JSON array without any additional text."
         )
         
         if language == "pl":
@@ -208,7 +225,24 @@ async def process_file(
                 "2. Metodologię i podejście\n"
                 "3. Kluczowe ustalenia i wnioski\n"
                 "4. Implikacje dla dziedziny\n"
-                "5. Wyodrębnienie odpowiedniej terminologii technicznej i koncepcji\n"
+                "5. Wyodrębnienie odpowiedniej terminologii technicznej i koncepcji\n\n"
+                "WAŻNE: Twoja odpowiedź MUSI być sformatowana jako tablica JSON, gdzie każdy element ma DOKŁADNIE następującą strukturę:\n"
+                "{\n"
+                "  \"instruction\": \"PODSUMOWANY konkretny fragment/kontekst z dokumentu, zawierający dokładną terminologię, na podstawie której zbudowano pole 'prompt'\",\n"
+                "  \"prompt\": \"Pytanie o pojęcia, definicje lub metody z dokumentu\",\n"
+                "  \"completion\": \"Wyczerpująca odpowiedź uwzględniająca pełny kontekst\",\n"
+                "  \"metadata\": {\n"
+                "    \"source_file\": \"plik_źródłowy.pdf\",\n"
+                "    \"chunk_index\": 3,\n"
+                "    \"total_chunks\": 12,\n"
+                "    \"model_used\": \"\",\n"
+                "    \"processing_time\": \"\",\n"
+                "    \"confidence_score\": 0.94,\n"
+                "    \"keywords\": [\"słowo_kluczowe1\", \"słowo_kluczowe2\"],\n"
+                "    \"extracted_entities\": [\"jednostka1\", \"jednostka2\"]\n"
+                "  }\n"
+                "}\n\n"
+                "Podziel dokument na 6-12 logicznych fragmentów. Każdy fragment powinien skupiać się na innym aspekcie artykułu. Zwróć wyłącznie tablicę JSON bez dodatkowego tekstu."
             )
         
         final_system_prompt = f"{base_system_prompt}\n\n{article_instructions}"
@@ -301,7 +335,8 @@ async def process_file(
         try:
             # Check for binary file types first
             extension = file_path_obj.suffix.lower()
-            if extension == '.pdf':
+            # Special handling for PDF as article - don't use the parser directly
+            if extension == '.pdf' and processing_type != 'article':
                 # For PDF files, delegate to the appropriate parser
                 from .parsers import parse_pdf
                 records = parse_pdf(str(file_path_obj), logger)
@@ -328,9 +363,26 @@ async def process_file(
                 records = parse_docx(str(file_path_obj), logger)
                 return records
             else:
-                # Text-based files can be opened with UTF-8 encoding
-                with file_path_obj.open('r', encoding='utf-8') as f:
-                    content = f.read()
+                # Special handling for PDF in article mode
+                if extension == '.pdf' and processing_type == 'article':
+                    logger.info(f"Extracting text from PDF for article processing: {file_path}")
+                    # Import PDF text extraction
+                    from pdfminer.high_level import extract_text
+                    from pdfminer.layout import LAParams
+                    
+                    # Use pdfminer to extract text
+                    laparams = LAParams(line_margin=0.5)
+                    with open(file_path, 'rb') as f:
+                        # Extract with UTF-8 encoding
+                        content = extract_text(f, laparams=laparams, codec='utf-8')
+                    # Clean whitespace
+                    from .parsers import _clean_whitespace
+                    content = _clean_whitespace(content)
+                    logger.info(f"Successfully extracted {len(content)} characters from PDF for article processing")
+                else:
+                    # Text-based files can be opened with UTF-8 encoding
+                    with file_path_obj.open('r', encoding='utf-8') as f:
+                        content = f.read()
         except Exception as read_error:
              logger.error(f"Failed to read file {file_path}: {read_error}")
              raise # Re-raise to be caught by the outer try-except
@@ -339,10 +391,17 @@ async def process_file(
         client = get_llm_client(model_provider)
 
         # Create the message for the LLM - WITHOUT including system as a role
-        messages = [
-            # System prompt goes as a parameter, not as a message with role="system"
-            {"role": "user", "content": f"Document content ({extension} format):\n\n{content}"}
-        ]
+        # For article processing add filename to ensure it's included in metadata
+        if processing_type == 'article':
+            messages = [
+                # System prompt goes as a parameter, not as a message with role="system"
+                {"role": "user", "content": f"Document content ({extension} format, source file: {basename}):\n\n{content}"}
+            ]
+        else:
+            messages = [
+                # System prompt goes as a parameter, not as a message with role="system"
+                {"role": "user", "content": f"Document content ({extension} format):\n\n{content}"}
+            ]
 
         # Call the LLM
         try:
