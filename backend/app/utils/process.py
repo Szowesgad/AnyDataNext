@@ -372,9 +372,18 @@ async def process_file(
                     
                     # Use pdfminer to extract text
                     laparams = LAParams(line_margin=0.5)
+                    # Nie wymuszaj kodowania - pozwól pdfminer wykryć je automatycznie
                     with open(file_path, 'rb') as f:
-                        # Extract with UTF-8 encoding
-                        content = extract_text(f, laparams=laparams, codec='utf-8')
+                        try:
+                            # Najpierw próbujemy bez określania kodowania
+                            content = extract_text(f, laparams=laparams)
+                        except UnicodeDecodeError:
+                            # Jeśli się nie uda, próbujemy z innymi kodowaniami
+                            logger.warning(f"UTF-8 decoding failed, trying alternative encodings for {file_path}")
+                            # Resetujemy wskaźnik pliku
+                            f.seek(0)
+                            # Spróbuj z latin1 (obsługuje wszystkie bajty)
+                            content = extract_text(f, laparams=laparams, codec='latin1')
                     # Clean whitespace
                     from .parsers import _clean_whitespace
                     content = _clean_whitespace(content)
