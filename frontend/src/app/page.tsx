@@ -3,6 +3,7 @@
 import Image from "next/image";
 import FileUpload from "@/components/FileUpload";
 import ProcessingConfigurator from "@/components/ProcessingConfigurator";
+import ModelSelector from "@/components/ModelSelector";
 import { useState, useEffect, useRef } from "react";
 import axios from 'axios';
 import { Progress } from '@/components/ui/progress';
@@ -65,6 +66,7 @@ export default function Home() {
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<AvailableModels | null>(null);
   const [isLoadingModels, setIsLoadingModels] = useState<boolean>(false);
+  const [config, setConfig] = useState<any>({});
 
   const ws = useRef<WebSocket | null>(null);
 
@@ -524,49 +526,69 @@ export default function Home() {
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-start p-8 md:p-12 lg:p-24 bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 text-gray-900 dark:text-gray-100">
-      <div className="flex justify-between items-center w-full mb-8">
-        <h1 className="text-4xl md:text-5xl font-bold text-center bg-clip-text text-transparent bg-gradient-to-r from-blue-500 to-purple-600 dark:from-blue-400 dark:to-purple-500 flex-grow">
-          AnyDataset Processor
-        </h1>
-        <button
-          className="rounded-full p-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-          onClick={toggleTheme}
-          title={`Switch to ${darkMode ? "light" : "dark"} mode`}
-        >
-          {darkMode ? (
-            // Sun icon for dark mode
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={1.5}
-              stroke="currentColor"
-              className="w-6 h-6"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z"
-              />
-            </svg>
-          ) : (
-            // Moon icon for light mode
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={1.5}
-              stroke="currentColor"
-              className="w-6 h-6"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z"
-              />
-            </svg>
-          )}
-        </button>
+      <div className="flex flex-col w-full mb-8">
+        <div className="flex justify-between items-center w-full mb-2">
+          <h1 className="text-4xl md:text-5xl font-bold text-center bg-clip-text text-transparent bg-gradient-to-r from-blue-500 to-purple-600 dark:from-blue-400 dark:to-purple-500 flex-grow">
+            AnyDataset Processor
+          </h1>
+          <button
+            className="rounded-full p-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+            onClick={toggleTheme}
+            title={`Switch to ${darkMode ? "light" : "dark"} mode`}
+          >
+            {darkMode ? (
+              // Sun icon for dark mode
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={1.5}
+                stroke="currentColor"
+                className="w-6 h-6"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z"
+                />
+              </svg>
+            ) : (
+              // Moon icon for light mode
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={1.5}
+                stroke="currentColor"
+                className="w-6 h-6"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z"
+                />
+              </svg>
+            )}
+          </button>
+        </div>
+        
+        {/* Recent Models Quick Selector */}
+        {!isProcessing && 
+          <div className="mb-2">
+            <ModelSelector 
+              className="max-w-lg" 
+              onModelSelect={(provider, model) => {
+                if (uploadedFileInfo) {
+                  setConfig(prev => ({
+                    ...prev,
+                    provider: provider,
+                    model: model
+                  }));
+                }
+              }}
+            />
+          </div>
+        }
       </div>
 
       <div className="w-full max-w-4xl bg-white dark:bg-gray-850 shadow-xl rounded-lg p-6 md:p-8">
@@ -640,6 +662,8 @@ export default function Home() {
               originalFilename={uploadedFileInfo.originalFilename}
               initialKeywords={uploadedFileInfo.keywords}
               initialLanguage={uploadedFileInfo.language}
+              initialProvider={config.provider}
+              initialModel={config.model}
               onSubmit={handleConfigureAndProcess}
               onCancel={handleCancel}
               backendUrl={backendUrl}

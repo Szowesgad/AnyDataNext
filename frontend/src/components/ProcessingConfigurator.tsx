@@ -2,6 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { AvailableModels } from '../types/models';
 
+// Interface for recent model history
+interface RecentModel {
+  provider: string;
+  model: string;
+  timestamp: number;
+}
+
 interface ProcessingConfig {
   provider: string;
   model: string;
@@ -32,6 +39,8 @@ interface ProcessingConfiguratorProps {
   originalFilename: string;
   initialKeywords?: string[];
   initialLanguage?: string;
+  initialProvider?: string;
+  initialModel?: string;
   onSubmit: (config: any) => void;
   onCancel: () => void;
   backendUrl: string;
@@ -44,6 +53,8 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
   originalFilename,
   initialKeywords,
   initialLanguage,
+  initialProvider,
+  initialModel,
   onSubmit,
   onCancel,
   backendUrl,
@@ -53,8 +64,8 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
 }) => {
   // Create internal config state
   const [config, setConfig] = useState<ProcessingConfig>({
-    provider: '',
-    model: '',
+    provider: initialProvider || '',
+    model: initialModel || '',
     keywords: initialKeywords || [],
     language: initialLanguage || 'pl',
     temperature: 0.7,
@@ -68,6 +79,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
   const [suggestedKeywords, setSuggestedKeywords] = useState<string[]>([]);
   const [suggestedPrompt, setSuggestedPrompt] = useState<string>('');
   const [isSuggesting, setIsSuggesting] = useState<boolean>(false);
+  const [recentModels, setRecentModels] = useState<RecentModel[]>([]);
 
   // Processing type options
   const [processingType, setProcessingType] = useState<string>('standard');
@@ -75,6 +87,19 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
   const [language, setLanguage] = useState<string>(initialLanguage || 'pl');
   const [addReasoning, setAddReasoning] = useState<boolean>(false);
   const [outputFormat, setOutputFormat] = useState<string>('json');
+
+  // Load recent models from localStorage
+  useEffect(() => {
+    try {
+      const storedModels = localStorage.getItem('recentModels');
+      if (storedModels) {
+        const parsedModels = JSON.parse(storedModels) as RecentModel[];
+        setRecentModels(parsedModels);
+      }
+    } catch (error) {
+      console.error('Error loading recent models from localStorage:', error);
+    }
+  }, []);
 
   // Initialize provider when component mounts
   useEffect(() => {
@@ -88,25 +113,72 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
     }
   }, [modelData]);
 
+  // Function to save a model to recent history
+  const saveModelToRecent = (provider: string, model: string) => {
+    // Create new recent model entry
+    const newEntry: RecentModel = {
+      provider,
+      model,
+      timestamp: Date.now()
+    };
+    
+    // Filter out any existing entry with the same provider/model pair
+    const filtered = recentModels.filter(item => 
+      !(item.provider === provider && item.model === model)
+    );
+    
+    // Add new entry and sort by timestamp (newest first)
+    const updated = [newEntry, ...filtered].slice(0, 10); // Keep only 10 most recent
+    
+    // Save to state and localStorage
+    setRecentModels(updated);
+    try {
+      localStorage.setItem('recentModels', JSON.stringify(updated));
+    } catch (error) {
+      console.error('Error saving recent models to localStorage:', error);
+    }
+  };
+
   // Update available models when provider changes or modelData loads
   useEffect(() => {
     if (modelData && config.provider) {
       const providerInfo = modelData[config.provider];
       if (providerInfo && Array.isArray(providerInfo.models)) {
-        setModelOptions(providerInfo.models.map(model => ({
+        // Map models to standard format
+        const standardizedModels = providerInfo.models.map(model => ({
           id: model.id || model.model_id || model,
           name: model.name || model.model_name || model
-        })));
+        }));
+        
+        // Get recent models for this provider
+        const recentForProvider = recentModels
+          .filter(rm => rm.provider === config.provider)
+          .map(rm => {
+            // Find the full model info for this recent model
+            const modelInfo = standardizedModels.find(m => m.id === rm.model);
+            return modelInfo ? { ...modelInfo, isRecent: true } : null;
+          })
+          .filter(Boolean) as ProviderModel[];
+          
+        // Filter out recent models from the full list to avoid duplicates
+        const recentModelIds = recentForProvider.map(m => m.id);
+        const regularModels = standardizedModels.filter(m => !recentModelIds.includes(m.id));
+        
+        // Combine recent models at the top with the rest of the models
+        setModelOptions([...recentForProvider, ...regularModels]);
         
         // If we haven't selected a model yet, or the selected model isn't available
         // for this provider, select the first available model
-        const modelExists = providerInfo.models.some(m => (m.id || m.model_id || m) === config.model);
+        const modelExists = standardizedModels.some(m => m.id === config.model);
         if (!config.model || !modelExists) {
-          if (providerInfo.models.length > 0) {
-            const firstModel = providerInfo.models[0];
+          if (standardizedModels.length > 0) {
+            // First try to use the most recent model for this provider
+            const mostRecentModel = recentForProvider.length > 0 ? recentForProvider[0] : null;
+            const modelToSelect = mostRecentModel || standardizedModels[0];
+            
             setConfig(prev => ({
               ...prev,
-              model: firstModel.id || firstModel.model_id || firstModel
+              model: modelToSelect.id
             }));
           }
         }
@@ -114,7 +186,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
         setModelOptions([]);
       }
     }
-  }, [config.provider, modelData]);
+  }, [config.provider, modelData, recentModels]);
 
   // Update processingType, language, addReasoning, and outputFormat config values when they change
   useEffect(() => {
@@ -203,6 +275,14 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
     }
   };
 
+  // Save model to recent history when Process button is clicked
+  const handleProcessWithModelTracking = (config: ProcessingConfig) => {
+    if (config.provider && config.model) {
+      saveModelToRecent(config.provider, config.model);
+    }
+    onSubmit(config);
+  };
+
   return (
     <div className="space-y-4 p-4 border rounded-lg bg-card shadow">
       <h3 className="text-lg font-medium">Processing Configuration</h3>
@@ -245,11 +325,38 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           </SelectTrigger>
           <SelectContent>
             {modelOptions.length > 0 ? (
-              modelOptions.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
-                  {model.name}
-                </SelectItem>
-              ))
+              <>
+                {/* Check if we have any recent models */}
+                {modelOptions.some((model: any) => model.isRecent) && (
+                  <>
+                    <div className="px-2 py-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
+                      Recently Used
+                    </div>
+                    {modelOptions
+                      .filter((model: any) => model.isRecent)
+                      .map((model) => (
+                        <SelectItem key={`recent-${model.id}`} value={model.id}>
+                          {model.name} ★
+                        </SelectItem>
+                      ))
+                    }
+                    <div className="h-px my-1 bg-gray-200 dark:bg-gray-700" />
+                    <div className="px-2 py-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
+                      All Models
+                    </div>
+                  </>
+                )}
+                
+                {/* Regular models (or all models if no recent ones) */}
+                {modelOptions
+                  .filter((model: any) => !model.isRecent)
+                  .map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.name}
+                    </SelectItem>
+                  ))
+                }
+              </>
             ) : (
               <SelectItem value="loading" disabled>
                 {isLoading ? 'Loading models...' : 'No models available'}
@@ -452,7 +559,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           Cancel
         </button>
         <button
-          onClick={() => onSubmit(config)}
+          onClick={() => handleProcessWithModelTracking(config)}
           className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
           type="button"
         >
