@@ -575,12 +575,34 @@ export default function Home() {
           <span>Server: {displayBackendUrl}</span>
           <button
             onClick={() => {
-              // Copy backend URL to clipboard
-              navigator.clipboard.writeText(backendUrl);
-              // Show a brief message that it was copied
-              const originalText = displayBackendUrl;
-              setDisplayBackendUrl('Copied to clipboard!');
-              setTimeout(() => setDisplayBackendUrl(originalText), 2000);
+              // Copy backend URL to clipboard using a safer approach
+              try {
+                // Create temporary textarea element
+                const textArea = document.createElement('textarea');
+                textArea.value = backendUrl;
+                
+                // Make the textarea out of viewport
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                textArea.style.top = '-999999px';
+                document.body.appendChild(textArea);
+                
+                // Select and copy
+                textArea.focus();
+                textArea.select();
+                document.execCommand('copy');
+                
+                // Clean up
+                document.body.removeChild(textArea);
+                
+                // Show a brief message that it was copied
+                const originalText = displayBackendUrl;
+                setDisplayBackendUrl('Copied to clipboard!');
+                setTimeout(() => setDisplayBackendUrl(originalText), 2000);
+              } catch (error) {
+                console.error('Failed to copy:', error);
+                alert('Could not copy to clipboard');
+              }
             }}
             className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
             title="Copy server URL"

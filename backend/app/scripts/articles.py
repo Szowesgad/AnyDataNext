@@ -36,11 +36,7 @@ def extract_article_metadata(text):
     }
     
     # Try to find title (usually at the beginning)
-    title_match = re.search(r"^(.+?)(?=
-
-|
-Streszczenie|
-Abstract)", text, re.DOTALL)
+    title_match = re.search(r"^(.+?)(?=\n\n|\nStreszczenie|\nAbstract)", text, re.DOTALL)
     if title_match:
         lines = title_match.group(1).strip().split('
 ')
