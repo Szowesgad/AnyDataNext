@@ -9,7 +9,9 @@
     "lint": "next lint",
     "test": "jest --passWithNoTests",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@radix-ui/react-context-menu": "^2.1.5",
@@ -30,6 +32,7 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "@testing-library/jest-dom": "^6.4.2",
     "@testing-library/react": "^14.2.1",
     "@testing-library/user-event": "^14.5.2",
@@ -44,6 +47,7 @@
     "jest-environment-jsdom": "^29.7.0",
     "msw": "^2.2.2",
     "postcss": "^8",
+    "puppeteer": "^24.8.0",
     "tailwindcss": "^3.3.0",
     "ts-jest": "^29.1.2",
     "typescript": "^5"
