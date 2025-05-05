@@ -19,6 +19,9 @@ jobs:
           cache: 'npm'
           cache-dependency-path: '**/package-lock.json'
 
+      - name: Set frontend environment variables
+        run: echo "NEXT_PUBLIC_BACKEND_URL=https://api.anydata.example" >> $GITHUB_ENV
+
       - name: Install Dependencies
         run: |
           cd frontend

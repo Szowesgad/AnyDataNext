@@ -1,14 +1,15 @@
 'use client';
 
-import Image from "next/image";
 import FileUpload from "@/components/FileUpload";
 import ProcessingConfigurator from "@/components/ProcessingConfigurator";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import axios from 'axios';
 import { Progress } from '@/components/ui/progress';
 import ExistingDatasets from '@/components/ExistingDatasets';
 import JobStatusRecovery from '@/components/JobStatusRecovery';
 import { AvailableModels } from '../types/models';
+import { webSocketService } from '@/lib/websocket';
+import { getStatus, getResultUrl } from '@/lib/api';
 
 // Helper function to determine if a file is audio/video based on extension
 function isAudioVideoFile(filename: string): boolean {
@@ -45,16 +46,7 @@ interface ProcessingConfig {
   processingType?: string;
 }
 
-interface ProcessingStatus {
-  progress: number;
-  statusText: string;
-  error: string | null;
-}
-
-type AppStep = 'upload' | 'configure' | 'processing' | 'results';
-
 export default function Home() {
-  const [appStep, setAppStep] = useState<AppStep>('upload');
   const [uploadedFileInfo, setUploadedFileInfo] = useState<UploadedFileInfoFromUpload | null>(null);
   const [showConfigurator, setShowConfigurator] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -66,15 +58,15 @@ export default function Home() {
   const [availableModels, setAvailableModels] = useState<AvailableModels | null>(null);
   const [isLoadingModels, setIsLoadingModels] = useState<boolean>(false);
 
-  const ws = useRef<WebSocket | null>(null);
+  // WebSocket connection managed centrally via WebSocketService
 
   // Use environment variable for backend URL with dynamic display
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
   const [displayBackendUrl, setDisplayBackendUrl] = useState<string>(backendUrl);
   // Jawnie konstruuj URL websocketa
-  const websocketUrl = backendUrl.includes('https://') 
-    ? backendUrl.replace('https://', 'wss://') 
-    : backendUrl.replace('http://', 'ws://');
+  // const websocketUrl = backendUrl.includes('https://') 
+  //   ? backendUrl.replace('https://', 'wss://') 
+  //   : backendUrl.replace('http://', 'ws://');
   
   // Fetch available models on component mount
   useEffect(() => {
@@ -105,267 +97,72 @@ export default function Home() {
     fetchModels();
   }, [backendUrl]);
 
-  // Function to create and setup WebSocket connection
-  const setupWebSocket = (jobId: string) => {
-    const clientId = `frontend_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    // Use the response job_id for WebSocket, not the fileId
-    const wsUrl = `${websocketUrl}/ws/${clientId}`;
-    console.log(`Connecting to WebSocket: ${wsUrl}`);
-    console.log(`Monitoring job: ${jobId}`);
-    
-    // Close existing connection if any
-    if (ws.current) {
-      try {
-        if (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING) {
-          ws.current.close(1000, "Normal closure");
-        }
-      } catch (e) {
-        console.error("Error closing existing WebSocket:", e);
-      }
-      ws.current = null;
-    }
-    
-    // Create new connection with error handling
-    try {
-      const socket = new WebSocket(wsUrl);
-      ws.current = socket;
+  // ====== Job Monitoring via WebSocketService with REST fallback ======
 
-      // Send job ID when connection opens
-      socket.onopen = () => {
-        console.log("WebSocket connection established");
-        // Try to send job ID to help with routing on the server
-        try {
-          socket.send(JSON.stringify({
-            type: "register",
-            job_id: jobId
-          }));
-        } catch (e) {
-          console.warn("Failed to send job registration message:", e);
-        }
-      };
-      
-      return socket;
-    } catch (e) {
-      console.error("Error creating WebSocket:", e);
-      return null;
-    }
-  };
-
-  // Maximum number of reconnection attempts
-  const MAX_RECONNECT_ATTEMPTS = 3;
-  // Time between reconnection attempts in ms
-  const RECONNECT_INTERVAL = 2000;
-  
   // Function to check job status via REST API (backup to WebSocket)
   const checkJobStatus = async (jobId: string) => {
-    if (!jobId) return;
-    
     try {
-      console.log(`Checking job status via REST API for job: ${jobId}`);
-      const response = await axios.get(`${backendUrl}/api/status/${jobId}`);
-      
-      if (response.status === 200) {
-        const jobData = response.data;
-        console.log("Job status response:", jobData);
-        
-        // Update UI based on job status
-        setStatusText(jobData.status || 'Unknown status');
-        setProcessingProgress(jobData.progress || 0);
-        
-        // Check for completion
-        if (jobData.completed) {
-          console.log('Job completed based on REST API check');
-          setStatusText('Processing Complete!');
-          setProcessingProgress(100);
-          setFinalResultUrl(`${backendUrl}/api/results/${jobId}`);
-          setIsProcessing(false);
-          setShowConfigurator(false);
-          return true; // Job completed
-        }
-        // Check for error
-        else if (jobData.status === 'error' || jobData.error) {
-          setError(`Processing Error: ${jobData.error || 'Unknown error'}`);
-          setStatusText('Processing Failed');
-          setIsProcessing(false);
-          return true; // Job completed (with error)
-        }
+      const jobData = await getStatus(jobId);
+      if (!jobData) return false;
+      setStatusText(jobData.status || 'Unknown status');
+      if (jobData.progress) {
+        setProcessingProgress(jobData.progress);
       }
-    } catch (error) {
-      console.error('Error checking job status:', error);
+      if (jobData.completed) {
+        setStatusText('Processing Complete!');
+        setProcessingProgress(100);
+        setFinalResultUrl(getResultUrl(jobId));
+        setIsProcessing(false);
+        setShowConfigurator(false);
+        return true;
+      }
+      if (jobData.status === 'error' || jobData.error) {
+        setError(jobData.error || 'Unknown error');
+        setIsProcessing(false);
+        return true;
+      }
+    } catch (err) {
+      console.error('Error checking job status:', err);
     }
-    
-    return false; // Job not completed
+    return false;
   };
 
   useEffect(() => {
-    let reconnectAttempts = 0;
-    let reconnectTimeout: NodeJS.Timeout | null = null;
-    let statusCheckInterval: NodeJS.Timeout | null = null;
-    
-    if (isProcessing && currentJobId) {
-      console.log(`Setting up monitoring for job: ${currentJobId}`);
-      
-      // Set up regular status checks as backup to WebSocket
-      // This is crucial for reliable status updates if WebSocket fails
-      statusCheckInterval = setInterval(async () => {
-        const completed = await checkJobStatus(currentJobId);
-        
-        // If job completed via REST check, we can stop polling
-        if (completed) {
-          console.log('Job completed via REST API check, clearing interval');
-          if (statusCheckInterval) {
-            clearInterval(statusCheckInterval);
-            statusCheckInterval = null;
-          }
-        }
-      }, 3000); // Check every 3 seconds
-      
-      // Set up WebSocket connection
-      const socket = setupWebSocket(currentJobId);
-      
-      // Check if socket was created successfully
-      if (!socket) {
-        console.warn('Failed to create WebSocket, will rely on REST API status checks');
-        setStatusText('Using backup connection method for updates...');
-        return;
+    if (!isProcessing || !currentJobId) return;
+
+    // Subscribe to WebSocketService
+    const unsubscribe = webSocketService.subscribe(currentJobId, (data) => {
+      const percent = data.total ? Math.round((data.current / data.total) * 100) : 0;
+      setProcessingProgress(percent);
+      setStatusText(data.status);
+
+      if (data.status === 'completed') {
+        setProcessingProgress(100);
+        setStatusText('Processing Complete!');
+        setFinalResultUrl(getResultUrl(currentJobId));
+        setIsProcessing(false);
+        setShowConfigurator(false);
       }
 
-      // Override the onopen handler we set in setupWebSocket
-      socket.onopen = () => {
-        console.log('WebSocket Connected');
-        setStatusText('Connected to server. Waiting for updates...');
-        // Reset reconnect attempts on successful connection
-        reconnectAttempts = 0;
-      };
+      if (data.status === 'failed') {
+        setError(data.error || 'Processing failed');
+        setIsProcessing(false);
+      }
+    });
 
-      socket.onmessage = (event) => {
-        try {
-          // Log raw message for debugging
-          console.log('Raw WebSocket message:', event.data);
-          
-          // Try to parse as JSON
-          const message = JSON.parse(event.data);
-          console.log('WebSocket Message (parsed):', message);
+    // REST polling fallback every 5s
+    const poll = setInterval(async () => {
+      const done = await checkJobStatus(currentJobId);
+      if (done) {
+        clearInterval(poll);
+      }
+    }, 5000);
 
-          // Debug information
-          console.log('Current job ID:', currentJobId);
-          console.log('Message job ID:', message.job_id);
-          console.log('Message type:', message.type);
-          console.log('Message status:', message.status);
-          
-          // Check job_id only if it exists in the message
-          if (message.job_id && message.job_id !== currentJobId) {
-            console.log(`Ignoring message for different job_id: ${message.job_id}`);
-            return;
-          }
-
-          if (message.type === 'job_update') {
-            setStatusText(message.status || 'Processing...');
-            setProcessingProgress(message.progress || 0);
-            
-            // Check for completion based on status
-            if (message.status === 'completed') {
-              console.log('Job completed based on status update');
-              setStatusText('Processing Complete!');
-              setProcessingProgress(100);
-              setFinalResultUrl(`${backendUrl}/api/results/${currentJobId}`);
-              setIsProcessing(false);
-              setShowConfigurator(false);
-            }
-            // Check for error
-            else if (message.status === 'error' || message.status === 'Error') {
-              setError(`Processing Error: ${message.details?.error || message.error || 'Unknown error'}`);
-              setStatusText('Processing Failed');
-              setIsProcessing(false);
-            }
-          } else if (message.type === 'job_complete') {
-            console.log('Job completed based on job_complete message');
-            setStatusText('Processing Complete!');
-            setProcessingProgress(100);
-            setFinalResultUrl(`${backendUrl}/api/results/${message.job_id || currentJobId}`);
-            setIsProcessing(false);
-            setShowConfigurator(false);
-          } else if (message.type === 'job_error') {
-            setError(`Processing Failed: ${message.error || 'Unknown error'}`);
-            setStatusText('Processing Failed');
-            setProcessingProgress(0);
-            setIsProcessing(false);
-          } else if (message.type === 'ping') {
-            console.log('Received ping from server');
-            // Try to send pong back to keep connection alive
-            try {
-              socket.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
-            } catch (e) {
-              console.warn('Failed to send pong response');
-            }
-          }
-        } catch (e) {
-          console.error('Failed to parse WebSocket message:', event.data, e);
-          // Don't set error for the user on parse failures, as this could be a benign issue
-          console.warn('Received message that could not be parsed');
-        }
-      };
-
-      socket.onerror = (event) => {
-        console.error('WebSocket Error:', event);
-        console.log('Will rely on REST API backup for status updates');
-        // Don't show error to user immediately, as we have the REST API backup
-        setStatusText('Using backup connection for updates...');
-      };
-
-      socket.onclose = (event) => {
-        console.log('WebSocket Disconnected:', event.code, event.reason);
-        
-        // Normal closure is code 1000, anything else is unexpected
-        if (event.code === 1000) {
-          console.log('WebSocket closed normally');
-          return;
-        }
-        
-        // Only attempt reconnection if still processing and not a normal close
-        if (isProcessing && event.code !== 1000) {
-          // Try to reconnect if we haven't exceeded max attempts
-          if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-            reconnectAttempts++;
-            console.log(`WebSocket disconnected. Attempting reconnect ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`);
-            setStatusText(`Using backup connection. Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-            
-            // Schedule reconnection attempt
-            reconnectTimeout = setTimeout(() => {
-              if (isProcessing && currentJobId) {
-                setupWebSocket(currentJobId);
-              }
-            }, RECONNECT_INTERVAL);
-          } else {
-            // Max reconnect attempts reached, but don't show error as we have REST backup
-            console.warn('WebSocket reconnection failed after maximum attempts');
-            setStatusText('Using polling for status updates...');
-            // We DON'T set an error here since we're still getting updates via REST API
-          }
-        }
-      };
-
-      // Cleanup function to run when component unmounts or dependencies change
-      return () => {
-        // Clear any pending reconnection timeout
-        if (reconnectTimeout) {
-          clearTimeout(reconnectTimeout);
-        }
-        
-        // Clear status check interval
-        if (statusCheckInterval) {
-          clearInterval(statusCheckInterval);
-        }
-        
-        // Close WebSocket if open
-        if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-          console.log('Closing WebSocket connection...');
-          ws.current.close();
-        }
-        ws.current = null;
-      };
-    }
-  }, [isProcessing, currentJobId, websocketUrl, backendUrl]);
+    return () => {
+      unsubscribe();
+      clearInterval(poll);
+    };
+  }, [isProcessing, currentJobId]);
 
   const handleUploadSuccess = (data: UploadedFileInfoFromUpload) => {
     console.log('Upload successful, data received:', data);
@@ -477,9 +274,7 @@ export default function Home() {
     setIsProcessing(false);
     setShowConfigurator(false);
     setProcessingProgress(0);
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.close();
-    }
+    webSocketService.disconnect();
   };
 
   const handleCancel = () => {
@@ -703,8 +498,7 @@ export default function Home() {
                     setProcessingProgress(jobStatus.progress || 0);
                     setStatusText(jobStatus.status || 'Processing...');
                     
-                    // Connect to WebSocket for updates
-                    setupWebSocket(jobId);
+                    // WebSocket connection will be set up automatically by effect
                   }
                 }}
               />
