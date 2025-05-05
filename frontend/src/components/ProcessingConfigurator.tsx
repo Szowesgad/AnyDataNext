@@ -374,12 +374,12 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           onValueChange={setProcessingType}
         >
           <SelectTrigger id="processingType" className="w-full">
-            <SelectValue placeholder="Wybierz typ przetwarzania" />
+            <SelectValue placeholder="Select processing type" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="standard">Standardowy</SelectItem>
-            <SelectItem value="article">Artykuł naukowy</SelectItem>
-            <SelectItem value="translate">Tłumaczenie</SelectItem>
+            <SelectItem value="standard">Standard</SelectItem>
+            <SelectItem value="article">Article</SelectItem>
+            <SelectItem value="translate">Translate</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -392,13 +392,13 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           onValueChange={setLanguage}
         >
           <SelectTrigger id="language" className="w-full">
-            <SelectValue placeholder="Wybierz język" />
+            <SelectValue placeholder="Select language" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="pl">Polski</SelectItem>
-            <SelectItem value="en">Angielski</SelectItem>
-            <SelectItem value="de">Niemiecki</SelectItem>
-            <SelectItem value="fr">Francuski</SelectItem>
+            <SelectItem value="pl">Polish</SelectItem>
+            <SelectItem value="en">English</SelectItem>
+            <SelectItem value="de">German</SelectItem>
+            <SelectItem value="fr">French</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -411,12 +411,12 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           onValueChange={setOutputFormat}
         >
           <SelectTrigger id="outputFormat" className="w-full">
-            <SelectValue placeholder="Wybierz format wyjściowy" />
+            <SelectValue placeholder="Select output format" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="json">JSON (jeden plik)</SelectItem>
-            <SelectItem value="jsonl">JSONL (linia po linii)</SelectItem>
-            <SelectItem value="csv">CSV (wartości rozdzielone)</SelectItem>
+            <SelectItem value="json">JSON (single file)</SelectItem>
+            <SelectItem value="jsonl">JSONL (line by line)</SelectItem>
+            <SelectItem value="csv">CSV (comma separated values)</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -430,7 +430,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           onChange={(e) => setAddReasoning(e.target.checked)}
           className="w-4 h-4"
         />
-        <label htmlFor="addReasoning" className="text-sm font-medium">Dodaj uzasadnienie (reasoning)</label>
+        <label htmlFor="addReasoning" className="text-sm font-medium">Add reasoning</label>
       </div>
 
       {/* System Prompt */}
@@ -443,7 +443,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
               className="text-xs text-blue-600 hover:text-blue-800"
               type="button"
             >
-              Zastosuj sugestię
+              Apply suggestion
             </button>
           )}
         </div>
@@ -453,11 +453,11 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           onChange={(e) => setConfig(prev => ({ ...prev, systemPrompt: e.target.value }))}
           className="w-full px-3 py-2 border rounded-md text-sm"
           rows={3}
-          placeholder="Wprowadź instrukcje dla modelu (opcjonalnie)"
+          placeholder="Enter instructions for the model (optional)"
         />
         {suggestedPrompt && (
           <div className="text-xs italic text-gray-600 border-l-2 border-gray-300 pl-2">
-            Sugestia: {suggestedPrompt}
+            Suggestion: {suggestedPrompt}
           </div>
         )}
       </div>
@@ -472,7 +472,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
               className="text-xs text-blue-600 hover:text-blue-800"
               type="button"
             >
-              Zastosuj sugestię
+              Apply suggestion
             </button>
           )}
         </div>
@@ -482,11 +482,11 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           value={keywordsInput}
           onChange={handleKeywordsChange}
           className="w-full px-3 py-2 border rounded-md text-sm"
-          placeholder="Wprowadź słowa kluczowe oddzielone przecinkami"
+          placeholder="Enter keywords separated by commas"
         />
         {suggestedKeywords.length > 0 && (
           <div className="text-xs italic text-gray-600 border-l-2 border-gray-300 pl-2">
-            Sugestie: {suggestedKeywords.join(', ')}
+            Suggestions: {suggestedKeywords.join(', ')}
           </div>
         )}
       </div>
@@ -520,7 +520,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
             setConfig(prev => ({ ...prev, maxTokens: value }));
           }}
           className="w-full px-3 py-2 border rounded-md text-sm"
-          placeholder="Zostaw puste dla domyślnego limitu tokenu modelu"
+          placeholder="Leave empty for model default"
         />
       </div>
 
@@ -537,7 +537,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
             }`}
             type="button"
           >
-            {isSuggesting ? 'Pobieranie sugestii...' : 'Pobierz sugestie'}
+            {isSuggesting ? 'Getting suggestions...' : 'Get suggestions'}
           </button>
           
           {(suggestedKeywords.length > 0 || suggestedPrompt) && (
@@ -546,7 +546,7 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
               className="px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700"
               type="button"
             >
-              Zastosuj wszystkie
+              Apply all
             </button>
           )}
         </div>
@@ -559,14 +559,14 @@ const ProcessingConfigurator: React.FC<ProcessingConfiguratorProps> = ({
           className="px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
           type="button"
         >
-          Anuluj
+          Cancel
         </button>
         <button
           onClick={() => handleProcessWithModelTracking(config)}
           className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
           type="button"
         >
-          Przetwórz plik
+          Process file
         </button>
       </div>
     </div>
