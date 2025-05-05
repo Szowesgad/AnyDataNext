@@ -335,13 +335,9 @@ async def process_file(
         try:
             # Check for binary file types first
             extension = file_path_obj.suffix.lower()
-            # Special handling for PDF as article - don't use the parser directly
-            if extension == '.pdf' and processing_type != 'article':
-                # For PDF files, delegate to the appropriate parser
-                from .parsers import parse_pdf
-                records = parse_pdf(str(file_path_obj), logger)
-                return records
-            elif extension in ['.wav', '.mp3', '.ogg', '.m4a', '.flac']:
+            
+            # Handle audio files specially
+            if extension in ['.wav', '.mp3', '.ogg', '.m4a', '.flac']:
                 # For audio files, we'll need special handling
                 logger.info(f"Detected audio file ({extension}). Delegating to multimedia processor.")
                 from .multimedia_processor import create_audio_text_dataset
@@ -357,20 +353,33 @@ async def process_file(
                         "error": "Standard text processing not suitable for audio files"
                     }
                 }]
+            # We'll extract text from DOCX directly instead of using a separate parser path
             elif extension == '.docx':
-                # For DOCX files, delegate to the appropriate parser
-                from .parsers import parse_docx
-                records = parse_docx(str(file_path_obj), logger)
-                return records
+                try:
+                    # For DOCX files, extract text content
+                    import docx
+                    logger.info(f"Extracting text from DOCX for processing: {file_path}")
+                    doc = docx.Document(file_path)
+                    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                    content = "\n\n".join(paragraphs)
+                    from .parsers import _clean_whitespace
+                    content = _clean_whitespace(content)
+                    logger.info(f"Successfully extracted {len(content)} characters from DOCX")
+                except Exception as e:
+                    logger.error(f"Error extracting text from DOCX, falling back to parser: {e}")
+                    # Fallback to parser if text extraction fails
+                    from .parsers import parse_docx
+                    records = parse_docx(str(file_path_obj), logger)
+                    return records
             else:
-                # Special handling for PDF in article mode
-                if extension == '.pdf' and processing_type == 'article':
-                    logger.info(f"Extracting text from PDF for article processing: {file_path}")
+                # Process PDF files in any mode with proper text extraction
+                if extension == '.pdf':
+                    logger.info(f"Extracting text from PDF for processing (mode: {processing_type}): {file_path}")
                     # Import PDF text extraction
                     from pdfminer.high_level import extract_text
                     from pdfminer.layout import LAParams
                     
-                    # Use pdfminer to extract text
+                    # Use pdfminer to extract text with robust error handling
                     laparams = LAParams(line_margin=0.5)
                     # Nie wymuszaj kodowania - pozwól pdfminer wykryć je automatycznie
                     with open(file_path, 'rb') as f:
@@ -387,7 +396,7 @@ async def process_file(
                     # Clean whitespace
                     from .parsers import _clean_whitespace
                     content = _clean_whitespace(content)
-                    logger.info(f"Successfully extracted {len(content)} characters from PDF for article processing")
+                    logger.info(f"Successfully extracted {len(content)} characters from PDF for processing (mode: {processing_type})")
                 else:
                     # Text-based files can be opened with UTF-8 encoding
                     with file_path_obj.open('r', encoding='utf-8') as f:
