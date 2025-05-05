@@ -115,6 +115,9 @@ export default function Home() {
     console.log(`Connecting to WebSocket: ${wsUrl}`);
     console.log(`Monitoring job: ${jobId}`);
     
+    // UWAGA: Jeśli WebSocket nie działa, aplikacja wciąż będzie funkcjonować
+    // dzięki REST API i statusy będą aktualizowane co 3 sekundy (fallback)
+    
     // Close existing connection if any
     if (ws.current) {
       try {
@@ -597,8 +600,33 @@ export default function Home() {
           <span>Server: {displayBackendUrl}</span>
           <button
             onClick={() => {
-              // Copy backend URL to clipboard using a safer approach
+              // Copy backend URL to clipboard using navigator.clipboard API with fallback
               try {
+                // Try using the modern Navigator Clipboard API first
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(backendUrl)
+                    .then(() => {
+                      // Show success message
+                      const originalText = displayBackendUrl;
+                      setDisplayBackendUrl('Copied to clipboard!');
+                      setTimeout(() => setDisplayBackendUrl(originalText), 2000);
+                    })
+                    .catch(err => {
+                      // If permission denied or other error, try fallback method
+                      console.warn('Navigator clipboard failed, trying fallback:', err);
+                      useFallbackCopy();
+                    });
+                } else {
+                  // Fallback for browsers that don't support navigator.clipboard
+                  useFallbackCopy();
+                }
+              } catch (error) {
+                console.error('Failed to copy:', error);
+                alert('Could not copy to clipboard');
+              }
+              
+              // Fallback copy method using document.execCommand
+              function useFallbackCopy() {
                 // Create temporary textarea element
                 const textArea = document.createElement('textarea');
                 textArea.value = backendUrl;
@@ -609,21 +637,28 @@ export default function Home() {
                 textArea.style.top = '-999999px';
                 document.body.appendChild(textArea);
                 
-                // Select and copy
-                textArea.focus();
-                textArea.select();
-                document.execCommand('copy');
-                
-                // Clean up
-                document.body.removeChild(textArea);
-                
-                // Show a brief message that it was copied
-                const originalText = displayBackendUrl;
-                setDisplayBackendUrl('Copied to clipboard!');
-                setTimeout(() => setDisplayBackendUrl(originalText), 2000);
-              } catch (error) {
-                console.error('Failed to copy:', error);
-                alert('Could not copy to clipboard');
+                try {
+                  // Select and copy
+                  textArea.focus();
+                  textArea.select();
+                  const successful = document.execCommand('copy');
+                  
+                  if (successful) {
+                    // Show success message
+                    const originalText = displayBackendUrl;
+                    setDisplayBackendUrl('Copied to clipboard!');
+                    setTimeout(() => setDisplayBackendUrl(originalText), 2000);
+                  } else {
+                    console.error('execCommand copy failed');
+                    alert('Could not copy to clipboard');
+                  }
+                } catch (err) {
+                  console.error('execCommand error:', err);
+                  alert('Could not copy to clipboard');
+                } finally {
+                  // Clean up
+                  document.body.removeChild(textArea);
+                }
               }
             }}
             className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
